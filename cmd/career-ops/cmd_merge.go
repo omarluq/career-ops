@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,9 +9,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/samber/lo"
+	"github.com/samber/oops"
+	"github.com/spf13/cobra"
+
 	"github.com/omarluq/career-ops/internal/states"
 	"github.com/omarluq/career-ops/internal/tracker"
-	"github.com/spf13/cobra"
 )
 
 var mergeCmd = &cobra.Command{
@@ -41,7 +45,6 @@ func init() {
 
 // parsedAppLine holds a parsed application row plus its raw line for in-place updates.
 type parsedAppLine struct {
-	Num     int
 	Date    string
 	Company string
 	Role    string
@@ -51,16 +54,14 @@ type parsedAppLine struct {
 	Report  string
 	Notes   string
 	Raw     string
+	Num     int
 }
 
 // parseAppLineRaw parses a markdown table line into a parsedAppLine.
-// Table format: | num | date | company | role | score | status | pdf | report | notes |
+// Table format: | num | date | company | role | score | status | pdf | report | notes |.
 func parseAppLineRaw(line string) *parsedAppLine {
 	parts := strings.Split(line, "|")
-	var fields []string
-	for _, p := range parts {
-		fields = append(fields, strings.TrimSpace(p))
-	}
+	fields := lo.Map(parts, func(p string, _ int) string { return strings.TrimSpace(p) })
 	// After splitting "| a | b | ... |", fields[0] and fields[len-1] are empty.
 	if len(fields) < 10 {
 		return nil
@@ -93,7 +94,7 @@ func safeField(fields []string, i int) string {
 func runMerge(_ *cobra.Command, _ []string) error {
 	careerOpsPath, err := filepath.Abs(mergePath)
 	if err != nil {
-		return fmt.Errorf("resolving path: %w", err)
+		return oops.Wrapf(err, "resolving path")
 	}
 
 	// Initialize states from YAML so Normalize/Label work properly.
@@ -102,19 +103,65 @@ func runMerge(_ *cobra.Command, _ []string) error {
 	// Locate applications.md
 	appsFile, err := tracker.FindAppsFile(careerOpsPath)
 	if err != nil {
-		fmt.Println("No applications.md found. Nothing to merge into.")
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("No applications.md found. Nothing to merge into.")
+			return nil
+		}
+		return oops.Wrapf(err, "finding applications file")
+	}
+
+	appLines, existingApps, maxNum, err := loadExistingApps(appsFile)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Existing: %d entries, max #%d\n", len(existingApps), maxNum)
+
+	tsvFiles, err := loadTSVAdditions(careerOpsPath)
+	if err != nil {
+		return err
+	}
+	if tsvFiles == nil {
 		return nil
 	}
 
-	content, err := os.ReadFile(appsFile)
-	if err != nil {
-		return fmt.Errorf("reading %s: %w", appsFile, err)
-	}
-	appLines := strings.Split(string(content), "\n")
+	fmt.Printf("Found %d pending additions\n", len(tsvFiles))
 
-	// Parse existing entries.
-	var existingApps []*parsedAppLine
-	maxNum := 0
+	appLines, _, stats := processTSVAdditions(
+		tsvFiles, appLines, existingApps, maxNum,
+	)
+
+	// Write back.
+	if !mergeDryRun {
+		if err := writeAndArchive(
+			appsFile, appLines, tsvFiles, careerOpsPath,
+		); err != nil {
+			return err
+		}
+	}
+
+	fmt.Printf(
+		"\nSummary: +%d added, %d updated, %d skipped\n",
+		stats.added, stats.updated, stats.skipped,
+	)
+	if mergeDryRun {
+		fmt.Println("(dry-run - no changes written)")
+	}
+
+	return nil
+}
+
+// loadExistingApps reads applications.md and parses existing entries.
+func loadExistingApps(
+	appsFile string,
+) (appLines []string, existingApps []*parsedAppLine, maxNum int, err error) {
+	content, err := os.ReadFile(filepath.Clean(appsFile))
+	if err != nil {
+		return nil, nil, 0, oops.Wrapf(err, "reading %s", appsFile)
+	}
+	appLines = strings.Split(string(content), "\n")
+
+	maxNum = 0
 	for _, line := range appLines {
 		if !strings.HasPrefix(line, "|") {
 			continue
@@ -127,187 +174,243 @@ func runMerge(_ *cobra.Command, _ []string) error {
 			continue
 		}
 		existingApps = append(existingApps, app)
-		if app.Num > maxNum {
-			maxNum = app.Num
-		}
+		maxNum = lo.Max([]int{maxNum, app.Num})
 	}
+	return appLines, existingApps, maxNum, nil
+}
 
-	fmt.Printf("Existing: %d entries, max #%d\n", len(existingApps), maxNum)
-
-	// Locate tracker additions.
+// loadTSVAdditions locates and returns sorted TSV files, or nil if none found.
+func loadTSVAdditions(careerOpsPath string) ([]string, error) {
 	additionsDir := filepath.Join(careerOpsPath, "batch", "tracker-additions")
 	tsvPattern := filepath.Join(additionsDir, "*.tsv")
 	tsvFiles, err := filepath.Glob(tsvPattern)
 	if err != nil {
-		return fmt.Errorf("glob tracker-additions: %w", err)
+		return nil, oops.Wrapf(err, "glob tracker-additions")
 	}
 	if len(tsvFiles) == 0 {
 		fmt.Println("No pending additions to merge.")
-		return nil
+		return nil, nil
 	}
 
 	// Sort numerically for deterministic processing.
 	sort.Slice(tsvFiles, func(i, j int) bool {
-		return extractLeadingNum(filepath.Base(tsvFiles[i])) < extractLeadingNum(filepath.Base(tsvFiles[j]))
+		return extractLeadingNum(filepath.Base(tsvFiles[i])) <
+			extractLeadingNum(filepath.Base(tsvFiles[j]))
 	})
+	return tsvFiles, nil
+}
 
-	fmt.Printf("Found %d pending additions\n", len(tsvFiles))
+// mergeStats tracks addition/update/skip counts.
+type mergeStats struct {
+	added   int
+	updated int
+	skipped int
+}
 
-	added := 0
-	updated := 0
-	skipped := 0
+// processTSVAdditions processes each TSV file against existing apps.
+func processTSVAdditions(
+	tsvFiles []string,
+	appLines []string,
+	existingApps []*parsedAppLine,
+	maxNum int,
+) (updatedLines []string, newMaxNum int, stats mergeStats) {
 	var newLines []string
 
 	for _, tsvPath := range tsvFiles {
 		filename := filepath.Base(tsvPath)
-		data, err := os.ReadFile(tsvPath)
+		data, err := os.ReadFile(filepath.Clean(tsvPath))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: reading %s: %v\n", filename, err)
-			skipped++
+			stats.skipped++
 			continue
 		}
 
 		addition := tracker.ParseTSVContent(string(data), filename)
 		if addition == nil {
-			skipped++
+			stats.skipped++
 			continue
 		}
 
-		// Check for duplicate:
-		// 1. Exact report number match
-		// 2. Exact entry number match
-		// 3. Company + role fuzzy match
-		reportNum := tracker.ExtractReportNum(addition.Report)
-		var duplicate *parsedAppLine
-
-		if reportNum != 0 {
-			for _, app := range existingApps {
-				if tracker.ExtractReportNum(app.Report) == reportNum {
-					duplicate = app
-					break
-				}
-			}
-		}
-
-		if duplicate == nil {
-			for _, app := range existingApps {
-				if app.Num == addition.Num {
-					duplicate = app
-					break
-				}
-			}
-		}
-
-		if duplicate == nil {
-			normCompany := tracker.NormalizeCompanyKey(addition.Company)
-			for _, app := range existingApps {
-				if tracker.NormalizeCompanyKey(app.Company) != normCompany {
-					continue
-				}
-				if tracker.RoleMatch(addition.Role, app.Role) {
-					duplicate = app
-					break
-				}
-			}
-		}
+		duplicate := findDuplicate(addition, existingApps)
 
 		if duplicate != nil {
-			newScore := tracker.ParseScore(addition.Score)
-			oldScore := tracker.ParseScore(duplicate.Score)
-
-			if newScore > oldScore {
-				fmt.Printf("Update: #%d %s - %s (%.1f -> %.1f)\n",
-					duplicate.Num, addition.Company, addition.Role, oldScore, newScore)
-
-				// Find the raw line in appLines and replace it.
-				for i, line := range appLines {
-					if line == duplicate.Raw {
-						// Output format: score before status (markdown table order).
-						notes := fmt.Sprintf("Re-eval %s (%.1f->%.1f). %s",
-							addition.Date, oldScore, newScore, addition.Notes)
-						appLines[i] = tracker.FormatTableLine(
-							duplicate.Num, addition.Date, addition.Company, addition.Role,
-							addition.Score, duplicate.Status, duplicate.PDF, addition.Report,
-							strings.TrimSpace(notes),
-						)
-						updated++
-						break
-					}
-				}
-			} else {
-				fmt.Printf("Skip: %s - %s (existing #%d %.1f >= new %.1f)\n",
-					addition.Company, addition.Role, duplicate.Num, oldScore, newScore)
-				skipped++
-			}
-		} else {
-			// New entry — use the TSV number if it's beyond maxNum, otherwise assign next.
-			entryNum := addition.Num
-			if entryNum <= maxNum {
-				maxNum++
-				entryNum = maxNum
-			} else {
-				maxNum = entryNum
-			}
-
-			// Output format: score before status (markdown table order).
-			newLine := tracker.FormatTableLine(
-				entryNum, addition.Date, addition.Company, addition.Role,
-				addition.Score, addition.Status, addition.PDF, addition.Report,
-				addition.Notes,
+			appLines, stats = handleDuplicateAddition(
+				addition, duplicate, appLines, stats,
 			)
+		} else {
+			newLine, num := appendNew(addition, maxNum)
+			maxNum = num
 			newLines = append(newLines, newLine)
-			added++
-			fmt.Printf("Add #%d: %s - %s (%s)\n", entryNum, addition.Company, addition.Role, addition.Score)
+			stats.added++
+			fmt.Printf(
+				"Add #%d: %s - %s (%s)\n",
+				num, addition.Company, addition.Role, addition.Score,
+			)
 		}
 	}
 
 	// Insert new lines after the header separator (|---|...).
 	if len(newLines) > 0 {
-		insertIdx := -1
-		for i, line := range appLines {
-			if strings.HasPrefix(line, "|") && strings.Contains(line, "---") {
-				insertIdx = i + 1
-				break
-			}
-		}
-		if insertIdx >= 0 {
-			// Splice new lines in.
-			updated := make([]string, 0, len(appLines)+len(newLines))
-			updated = append(updated, appLines[:insertIdx]...)
-			updated = append(updated, newLines...)
-			updated = append(updated, appLines[insertIdx:]...)
-			appLines = updated
+		appLines = insertAfterSeparator(appLines, newLines)
+	}
+
+	return appLines, maxNum, stats
+}
+
+// findDuplicate checks for an existing entry matching the addition by
+// report number, entry number, or company+role fuzzy match.
+func findDuplicate(
+	addition *tracker.Addition,
+	existingApps []*parsedAppLine,
+) *parsedAppLine {
+	reportNum := tracker.ExtractReportNum(addition.Report)
+
+	if reportNum != 0 {
+		if match, found := lo.Find(existingApps, func(app *parsedAppLine) bool {
+			return tracker.ExtractReportNum(app.Report) == reportNum
+		}); found {
+			return match
 		}
 	}
 
-	// Write back.
-	if !mergeDryRun {
-		output := strings.Join(appLines, "\n")
-		if err := tracker.BackupAndWrite(appsFile, []byte(output)); err != nil {
-			return fmt.Errorf("writing %s: %w", appsFile, err)
-		}
-
-		// Move processed files to merged/.
-		if mergeArchive {
-			mergedDir := filepath.Join(additionsDir, "merged")
-			if err := os.MkdirAll(mergedDir, 0755); err != nil {
-				return fmt.Errorf("creating merged dir: %w", err)
-			}
-			for _, tsvPath := range tsvFiles {
-				dest := filepath.Join(mergedDir, filepath.Base(tsvPath))
-				if err := os.Rename(tsvPath, dest); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: moving %s: %v\n", filepath.Base(tsvPath), err)
-				}
-			}
-			fmt.Printf("Moved %d TSVs to merged/\n", len(tsvFiles))
-		}
+	if match, found := lo.Find(existingApps, func(app *parsedAppLine) bool {
+		return app.Num == addition.Num
+	}); found {
+		return match
 	}
 
-	fmt.Printf("\nSummary: +%d added, %d updated, %d skipped\n", added, updated, skipped)
-	if mergeDryRun {
-		fmt.Println("(dry-run - no changes written)")
+	normCompany := tracker.NormalizeCompanyKey(addition.Company)
+	if match, found := lo.Find(existingApps, func(app *parsedAppLine) bool {
+		return tracker.NormalizeCompanyKey(app.Company) == normCompany &&
+			tracker.RoleMatch(addition.Role, app.Role)
+	}); found {
+		return match
 	}
 
+	return nil
+}
+
+// handleDuplicateAddition updates an existing entry if the new score is higher.
+func handleDuplicateAddition(
+	addition *tracker.Addition,
+	duplicate *parsedAppLine,
+	appLines []string,
+	stats mergeStats,
+) ([]string, mergeStats) {
+	newScore := tracker.ParseScore(addition.Score)
+	oldScore := tracker.ParseScore(duplicate.Score)
+
+	if newScore <= oldScore {
+		fmt.Printf(
+			"Skip: %s - %s (existing #%d %.1f >= new %.1f)\n",
+			addition.Company, addition.Role,
+			duplicate.Num, oldScore, newScore,
+		)
+		stats.skipped++
+		return appLines, stats
+	}
+
+	fmt.Printf(
+		"Update: #%d %s - %s (%.1f -> %.1f)\n",
+		duplicate.Num, addition.Company, addition.Role,
+		oldScore, newScore,
+	)
+
+	// Find the raw line in appLines and replace it.
+	for i, line := range appLines {
+		if line == duplicate.Raw {
+			notes := fmt.Sprintf(
+				"Re-eval %s (%.1f->%.1f). %s",
+				addition.Date, oldScore, newScore, addition.Notes,
+			)
+			appLines[i] = tracker.FormatTableLine(
+				duplicate.Num, addition.Date,
+				addition.Company, addition.Role,
+				addition.Score, duplicate.Status,
+				duplicate.PDF, addition.Report,
+				strings.TrimSpace(notes),
+			)
+			stats.updated++
+			break
+		}
+	}
+	return appLines, stats
+}
+
+// appendNew creates a new table line for a non-duplicate addition.
+func appendNew(
+	addition *tracker.Addition, maxNum int,
+) (newLine string, newMaxNum int) {
+	entryNum := addition.Num
+	if entryNum <= maxNum {
+		maxNum++
+		entryNum = maxNum
+	} else {
+		maxNum = entryNum
+	}
+
+	newLine = tracker.FormatTableLine(
+		entryNum, addition.Date, addition.Company, addition.Role,
+		addition.Score, addition.Status, addition.PDF, addition.Report,
+		addition.Notes,
+	)
+	return newLine, maxNum
+}
+
+// insertAfterSeparator splices new lines after the markdown table header separator.
+func insertAfterSeparator(appLines, newLines []string) []string {
+	insertIdx := -1
+	for i, line := range appLines {
+		if strings.HasPrefix(line, "|") && strings.Contains(line, "---") {
+			insertIdx = i + 1
+			break
+		}
+	}
+	if insertIdx >= 0 {
+		updated := make([]string, 0, len(appLines)+len(newLines))
+		updated = append(updated, appLines[:insertIdx]...)
+		updated = append(updated, newLines...)
+		updated = append(updated, appLines[insertIdx:]...)
+		appLines = updated
+	}
+	return appLines
+}
+
+// writeAndArchive writes the merged content and optionally archives TSVs.
+func writeAndArchive(
+	appsFile string,
+	appLines []string,
+	tsvFiles []string,
+	careerOpsPath string,
+) error {
+	output := strings.Join(appLines, "\n")
+	if err := tracker.BackupAndWrite(appsFile, []byte(output)); err != nil {
+		return oops.Wrapf(err, "writing %s", appsFile)
+	}
+
+	if mergeArchive {
+		return archiveTSVs(tsvFiles, careerOpsPath)
+	}
+	return nil
+}
+
+// archiveTSVs moves processed TSV files to the merged/ subdirectory.
+func archiveTSVs(tsvFiles []string, careerOpsPath string) error {
+	additionsDir := filepath.Join(careerOpsPath, "batch", "tracker-additions")
+	mergedDir := filepath.Join(additionsDir, "merged")
+	if err := os.MkdirAll(mergedDir, 0o750); err != nil {
+		return oops.Wrapf(err, "creating merged dir")
+	}
+	for _, tsvPath := range tsvFiles {
+		dest := filepath.Join(mergedDir, filepath.Base(tsvPath))
+		if err := os.Rename(tsvPath, dest); err != nil {
+			fmt.Fprintf(
+				os.Stderr, "warning: moving %s: %v\n",
+				filepath.Base(tsvPath), err,
+			)
+		}
+	}
+	fmt.Printf("Moved %d TSVs to merged/\n", len(tsvFiles))
 	return nil
 }
 
@@ -321,6 +424,9 @@ func extractLeadingNum(name string) int {
 			break
 		}
 	}
-	n, _ := strconv.Atoi(string(digits))
+	n, err := strconv.Atoi(string(digits))
+	if err != nil {
+		return 0
+	}
 	return n
 }

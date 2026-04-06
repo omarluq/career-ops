@@ -9,6 +9,7 @@ import (
 
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
+	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 )
 
@@ -27,52 +28,21 @@ func init() {
 }
 
 // paperSize returns (width, height) in inches for the given format name.
-func paperSize(format string) (float64, float64, error) {
+func paperSize(format string) (w, h float64, err error) {
 	switch strings.ToLower(format) {
 	case "a4":
 		return 8.27, 11.69, nil
 	case "letter":
 		return 8.5, 11.0, nil
 	default:
-		return 0, 0, fmt.Errorf("invalid format %q, use: a4, letter", format)
+		return 0, 0, oops.Errorf("invalid format %q, use: a4, letter", format)
 	}
 }
 
-func runPDF(cmd *cobra.Command, args []string) error {
-	inputPath, err := filepath.Abs(args[0])
-	if err != nil {
-		return fmt.Errorf("resolving input path: %w", err)
-	}
-	outputPath, err := filepath.Abs(args[1])
-	if err != nil {
-		return fmt.Errorf("resolving output path: %w", err)
-	}
-
-	width, height, err := paperSize(pdfFormat)
-	if err != nil {
-		return err
-	}
-
-	// Verify input file exists.
-	if _, err := os.Stat(inputPath); err != nil {
-		return fmt.Errorf("input file: %w", err)
-	}
-
-	fmt.Fprintf(os.Stderr, "Input:  %s\n", inputPath)
-	fmt.Fprintf(os.Stderr, "Output: %s\n", outputPath)
-	fmt.Fprintf(os.Stderr, "Format: %s\n", strings.ToUpper(pdfFormat))
-
-	// Read HTML and rewrite relative font paths to absolute file:// URLs,
-	// mirroring the behaviour of generate-pdf.mjs.
-	htmlBytes, err := os.ReadFile(inputPath)
-	if err != nil {
-		return fmt.Errorf("reading input HTML: %w", err)
-	}
-	html := string(htmlBytes)
-
-	// Resolve fonts/ relative to the project root (where the binary is
-	// typically invoked). Fall back to the input file's directory.
-	fontsDir := filepath.Join(filepath.Dir(inputPath), "fonts")
+// rewriteFontURLs rewrites relative font paths in the HTML to absolute file:// URLs.
+func rewriteFontURLs(html, inputDir string) string {
+	// Resolve fonts/ relative to the input file's directory.
+	fontsDir := filepath.Join(inputDir, "fonts")
 	if _, statErr := os.Stat(fontsDir); statErr != nil {
 		// Try CWD-relative fonts/ as well.
 		if cwd, cwdErr := os.Getwd(); cwdErr == nil {
@@ -84,23 +54,46 @@ func runPDF(cmd *cobra.Command, args []string) error {
 	}
 	html = strings.ReplaceAll(html, "url('./fonts/", "url('file://"+fontsDir+"/")
 	html = strings.ReplaceAll(html, `url("./fonts/`, `url("file://`+fontsDir+"/")
+	return html
+}
 
-	// Write the modified HTML to a temp file so chromedp can navigate to it.
+// prepareHTML reads the input HTML, rewrites font URLs, and writes it to a temp file.
+// Returns the file:// URL for the temp file and a cleanup function.
+func prepareHTML(inputPath string) (fileURL string, cleanup func(), err error) {
+	htmlBytes, err := os.ReadFile(filepath.Clean(inputPath))
+	if err != nil {
+		return "", nil, oops.Wrapf(err, "reading input HTML")
+	}
+
+	html := rewriteFontURLs(string(htmlBytes), filepath.Dir(inputPath))
+
 	tmpFile, err := os.CreateTemp("", "career-ops-pdf-*.html")
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return "", nil, oops.Wrapf(err, "creating temp file")
 	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.WriteString(html); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("writing temp HTML: %w", err)
+	cleanup = func() {
+		if removeErr := os.Remove(tmpFile.Name()); removeErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: removing temp file: %v\n", removeErr)
+		}
 	}
-	tmpFile.Close()
 
-	fileURL := "file://" + tmpFile.Name()
+	if _, writeErr := tmpFile.WriteString(html); writeErr != nil {
+		if closeErr := tmpFile.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: closing temp file: %v\n", closeErr)
+		}
+		cleanup()
+		return "", nil, oops.Wrapf(writeErr, "writing temp HTML")
+	}
+	if closeErr := tmpFile.Close(); closeErr != nil {
+		cleanup()
+		return "", nil, oops.Wrapf(closeErr, "closing temp file")
+	}
 
-	// Launch headless Chrome via chromedp.
+	return "file://" + tmpFile.Name(), cleanup, nil
+}
+
+// renderPDF launches headless Chrome and renders the HTML at fileURL to PDF bytes.
+func renderPDF(fileURL string, width, height float64) ([]byte, error) {
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
 
@@ -111,8 +104,8 @@ func runPDF(cmd *cobra.Command, args []string) error {
 		chromedp.Navigate(fileURL),
 		chromedp.WaitReady("body"),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			var err error
-			pdfBuf, _, err = page.PrintToPDF().
+			var printErr error
+			pdfBuf, _, printErr = page.PrintToPDF().
 				WithPaperWidth(width).
 				WithPaperHeight(height).
 				WithMarginTop(margin).
@@ -122,17 +115,52 @@ func runPDF(cmd *cobra.Command, args []string) error {
 				WithPrintBackground(true).
 				WithPreferCSSPageSize(false).
 				Do(ctx)
-			return err
+			return printErr
 		}),
 	); err != nil {
-		return fmt.Errorf("generating PDF: %w", err)
+		return nil, oops.Wrapf(err, "generating PDF")
+	}
+	return pdfBuf, nil
+}
+
+func runPDF(_ *cobra.Command, args []string) error {
+	inputPath, err := filepath.Abs(args[0])
+	if err != nil {
+		return oops.Wrapf(err, "resolving input path")
+	}
+	outputPath, err := filepath.Abs(args[1])
+	if err != nil {
+		return oops.Wrapf(err, "resolving output path")
 	}
 
-	if err := os.WriteFile(outputPath, pdfBuf, 0o644); err != nil {
-		return fmt.Errorf("writing PDF: %w", err)
+	width, height, err := paperSize(pdfFormat)
+	if err != nil {
+		return err
 	}
 
-	// Approximate page count from PDF internals.
+	if _, statErr := os.Stat(inputPath); statErr != nil {
+		return oops.Wrapf(statErr, "input file")
+	}
+
+	fmt.Fprintf(os.Stderr, "Input:  %s\n", inputPath)
+	fmt.Fprintf(os.Stderr, "Output: %s\n", outputPath)
+	fmt.Fprintf(os.Stderr, "Format: %s\n", strings.ToUpper(pdfFormat))
+
+	fileURL, cleanup, err := prepareHTML(inputPath)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	pdfBuf, err := renderPDF(fileURL, width, height)
+	if err != nil {
+		return err
+	}
+
+	if err = os.WriteFile(outputPath, pdfBuf, 0o600); err != nil {
+		return oops.Wrapf(err, "writing PDF")
+	}
+
 	pageCount := strings.Count(string(pdfBuf), "/Type /Page") -
 		strings.Count(string(pdfBuf), "/Type /Pages")
 	if pageCount < 1 {

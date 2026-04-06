@@ -6,12 +6,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/samber/lo"
 	"github.com/omarluq/career-ops/internal/states"
 )
 
-// TrackerAddition represents a parsed addition from batch/tracker-additions/*.tsv.
-type TrackerAddition struct {
-	Num     int
+// Addition represents a parsed addition from batch/tracker-additions/*.tsv.
+type Addition struct {
 	Date    string
 	Company string
 	Role    string
@@ -20,6 +20,7 @@ type TrackerAddition struct {
 	PDF     string
 	Report  string
 	Notes   string
+	Num     int
 }
 
 var reExtractReportNum = regexp.MustCompile(`\[(\d+)\]`)
@@ -30,13 +31,16 @@ func ExtractReportNum(reportStr string) int {
 	if m == nil {
 		return 0
 	}
-	n, _ := strconv.Atoi(m[1])
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0
+	}
 	return n
 }
 
 // ParseTSVContent parses a TSV file content into a tracker addition.
 // Handles 9-col TSV, 8-col TSV, and pipe-delimited markdown.
-func ParseTSVContent(content, filename string) *TrackerAddition {
+func ParseTSVContent(content, filename string) *Addition {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil
@@ -49,15 +53,12 @@ func ParseTSVContent(content, filename string) *TrackerAddition {
 	return parseTSVTabContent(content, filename)
 }
 
-func parsePipeContent(content, filename string) *TrackerAddition {
+func parsePipeContent(content, _ string) *Addition {
 	parts := strings.Split(content, "|")
-	var fields []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			fields = append(fields, p)
-		}
-	}
+	fields := lo.Filter(
+		lo.Map(parts, func(p string, _ int) string { return strings.TrimSpace(p) }),
+		func(p string, _ int) bool { return p != "" },
+	)
 	if len(fields) < 8 {
 		return nil
 	}
@@ -67,7 +68,7 @@ func parsePipeContent(content, filename string) *TrackerAddition {
 		return nil
 	}
 
-	return &TrackerAddition{
+	return &Addition{
 		Num:     num,
 		Date:    fields[1],
 		Company: fields[2],
@@ -80,31 +81,10 @@ func parsePipeContent(content, filename string) *TrackerAddition {
 	}
 }
 
-func parseTSVTabContent(content, filename string) *TrackerAddition {
+func parseTSVTabContent(content, _ string) *Addition {
 	parts := strings.Split(content, "\t")
 	if len(parts) < 8 {
 		return nil
-	}
-
-	// Detect column order: col4 and col5 could be (status, score) or (score, status)
-	col4 := strings.TrimSpace(parts[4])
-	col5 := strings.TrimSpace(parts[5])
-
-	col4IsScore := isScoreFormat(col4)
-	col5IsScore := isScoreFormat(col5)
-	col4IsStatus := isStatusFormat(col4)
-	col5IsStatus := isStatusFormat(col5)
-
-	var statusCol, scoreCol string
-	switch {
-	case col4IsStatus && !col4IsScore:
-		statusCol, scoreCol = col4, col5
-	case col4IsScore && col5IsStatus:
-		statusCol, scoreCol = col5, col4
-	case col5IsScore && !col4IsScore:
-		statusCol, scoreCol = col4, col5
-	default:
-		statusCol, scoreCol = col4, col5
 	}
 
 	num, err := strconv.Atoi(strings.TrimSpace(parts[0]))
@@ -112,7 +92,12 @@ func parseTSVTabContent(content, filename string) *TrackerAddition {
 		return nil
 	}
 
-	return &TrackerAddition{
+	statusCol, scoreCol := detectStatusScoreColumns(
+		strings.TrimSpace(parts[4]),
+		strings.TrimSpace(parts[5]),
+	)
+
+	return &Addition{
 		Num:     num,
 		Date:    strings.TrimSpace(parts[1]),
 		Company: strings.TrimSpace(parts[2]),
@@ -122,6 +107,21 @@ func parseTSVTabContent(content, filename string) *TrackerAddition {
 		PDF:     strings.TrimSpace(parts[6]),
 		Report:  strings.TrimSpace(parts[7]),
 		Notes:   safeIndexTab(parts, 8),
+	}
+}
+
+// detectStatusScoreColumns resolves the ambiguous column order between
+// status and score in TSV files. Returns (status, score).
+func detectStatusScoreColumns(col4, col5 string) (statusCol, scoreCol string) {
+	switch {
+	case isStatusFormat(col4) && !isScoreFormat(col4):
+		return col4, col5
+	case isScoreFormat(col4) && isStatusFormat(col5):
+		return col5, col4
+	case isScoreFormat(col5) && !isScoreFormat(col4):
+		return col4, col5
+	default:
+		return col4, col5
 	}
 }
 
@@ -135,18 +135,15 @@ func isScoreFormat(s string) bool {
 var statusPrefixes = []string{
 	"evaluada", "aplicado", "respondido", "entrevista", "oferta",
 	"rechazado", "descartado", "no aplicar", "cerrada", "duplicado",
-	"repost", "condicional", "hold", "monitor", "evaluated", "applied",
+	"repost", "conditional", "hold", "monitor", "evaluated", "applied",
 	"responded", "interview", "offer", "rejected", "discarded", "skip",
 }
 
 func isStatusFormat(s string) bool {
 	lower := strings.ToLower(strings.TrimSpace(s))
-	for _, prefix := range statusPrefixes {
-		if strings.HasPrefix(lower, prefix) {
-			return true
-		}
-	}
-	return false
+	return lo.SomeBy(statusPrefixes, func(prefix string) bool {
+		return strings.HasPrefix(lower, prefix)
+	})
 }
 
 func safeIndex(s []string, i int) string {
@@ -164,7 +161,7 @@ func safeIndexTab(s []string, i int) string {
 }
 
 // FormatTSVAddition formats a tracker addition as a TSV line (for batch output).
-func FormatTSVAddition(a *TrackerAddition) string {
+func FormatTSVAddition(a *Addition) string {
 	return fmt.Sprintf("%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
 		a.Num, a.Date, a.Company, a.Role, a.Status, a.Score, a.PDF, a.Report, a.Notes)
 }

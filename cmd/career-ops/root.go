@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -16,9 +17,10 @@ import (
 var cfgFile string
 
 var rootCmd = &cobra.Command{
-	Use:   "career-ops",
-	Short: "AI job search pipeline CLI",
-	Long:    "career-ops automates pipeline tracking, offer evaluation, CV generation, portal scanning, and batch processing.",
+	Use:     "career-ops",
+	Short:   "AI job search pipeline CLI",
+	Long: "career-ops automates pipeline tracking, offer evaluation, " +
+		"CV generation, portal scanning, and batch processing.",
 	Version: vinfo.String(),
 }
 
@@ -28,7 +30,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: config/profile.yml)")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "enable verbose output")
 
-	_ = viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
+	if err := viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose")); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: binding verbose flag: %v\n", err)
+	}
 
 	rootCmd.AddCommand(
 		verifyCmd,
@@ -55,7 +59,8 @@ func initConfig() {
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		var configFileNotFoundError viper.ConfigFileNotFoundError
+		if !errors.As(err, &configFileNotFoundError) {
 			fmt.Fprintf(os.Stderr, "warning: config error: %v\n", err)
 		}
 	}

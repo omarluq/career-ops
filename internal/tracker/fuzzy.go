@@ -3,6 +3,8 @@ package tracker
 import (
 	"strconv"
 	"strings"
+
+	"github.com/samber/lo"
 )
 
 // NormalizeCompany strips common suffixes and normalizes a company name for matching.
@@ -52,11 +54,10 @@ func RoleMatch(a, b string) bool {
 	wordsB := significantWords(NormalizeRole(b))
 	overlap := 0
 	for _, wa := range wordsA {
-		for _, wb := range wordsB {
-			if strings.Contains(wa, wb) || strings.Contains(wb, wa) {
-				overlap++
-				break
-			}
+		if lo.SomeBy(wordsB, func(wb string) bool {
+			return strings.Contains(wa, wb) || strings.Contains(wb, wa)
+		}) {
+			overlap++
 		}
 	}
 	return overlap >= 2
@@ -69,17 +70,15 @@ func ParseScore(s string) float64 {
 	if m == nil {
 		return 0
 	}
-	v, _ := strconv.ParseFloat(m[1], 64)
+	v, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0
+	}
 	return v
 }
 
 func significantWords(s string) []string {
-	words := strings.Fields(s)
-	var result []string
-	for _, w := range words {
-		if len(w) > 3 {
-			result = append(result, w)
-		}
-	}
-	return result
+	return lo.Filter(strings.Fields(s), func(w string, _ int) bool {
+		return len(w) > 3
+	})
 }

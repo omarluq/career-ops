@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/samber/oops"
+
 	"github.com/omarluq/career-ops/internal/model"
 )
 
@@ -14,22 +16,22 @@ func WriteAtomic(path string, content []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".career-ops-*.tmp")
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return oops.Wrapf(err, "creating temp file")
 	}
 	tmpPath := tmp.Name()
 
-	if _, err := tmp.Write(content); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("writing temp file: %w", err)
+	if _, writeErr := tmp.Write(content); writeErr != nil {
+		closeErr := tmp.Close()
+		removeErr := os.Remove(tmpPath)
+		return oops.Wrapf(writeErr, "writing temp file (close=%v, remove=%v)", closeErr, removeErr)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("closing temp file: %w", err)
+		removeErr := os.Remove(tmpPath)
+		return oops.Wrapf(err, "closing temp file (remove=%v)", removeErr)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("renaming temp file: %w", err)
+		removeErr := os.Remove(tmpPath)
+		return oops.Wrapf(err, "renaming temp file (remove=%v)", removeErr)
 	}
 	return nil
 }
@@ -37,28 +39,38 @@ func WriteAtomic(path string, content []byte) error {
 // BackupAndWrite creates a .bak backup then writes atomically.
 func BackupAndWrite(path string, content []byte) error {
 	if _, err := os.Stat(path); err == nil {
-		bakPath := path + ".bak"
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("reading for backup: %w", err)
-		}
-		if err := os.WriteFile(bakPath, data, 0644); err != nil {
-			return fmt.Errorf("writing backup: %w", err)
+		if err := writeBackup(path); err != nil {
+			return err
 		}
 	}
 	return WriteAtomic(path, content)
 }
 
+// writeBackup creates a .bak copy of the file at the given path.
+func writeBackup(path string) error {
+	cleanPath := filepath.Clean(path)
+	data, err := os.ReadFile(cleanPath)
+	if err != nil {
+		return oops.Wrapf(err, "reading for backup")
+	}
+	bakPath := filepath.Clean(cleanPath + ".bak")
+	return WriteAtomic(bakPath, data)
+}
+
 // UpdateStatus updates a single application's status in applications.md.
-func UpdateStatus(careerOpsPath string, app model.CareerApplication, newStatus string) error {
+func UpdateStatus(
+	careerOpsPath string,
+	app *model.CareerApplication,
+	newStatus string,
+) error {
 	filePath, err := FindAppsFile(careerOpsPath)
 	if err != nil {
 		return err
 	}
 
-	content, err := os.ReadFile(filePath)
+	content, err := os.ReadFile(filepath.Clean(filePath))
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", filePath, err)
+		return oops.Wrapf(err, "reading %s", filePath)
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -68,7 +80,8 @@ func UpdateStatus(careerOpsPath string, app model.CareerApplication, newStatus s
 		if !strings.HasPrefix(strings.TrimSpace(line), "|") {
 			continue
 		}
-		if app.ReportNumber != "" && strings.Contains(line, fmt.Sprintf("[%s]", app.ReportNumber)) {
+		if app.ReportNumber != "" &&
+			strings.Contains(line, fmt.Sprintf("[%s]", app.ReportNumber)) {
 			lines[i] = strings.Replace(line, app.Status, newStatus, 1)
 			found = true
 			break
@@ -76,14 +89,22 @@ func UpdateStatus(careerOpsPath string, app model.CareerApplication, newStatus s
 	}
 
 	if !found {
-		return fmt.Errorf("application not found: report %s", app.ReportNumber)
+		return oops.Wrapf(nil,
+			"application not found: report %s",
+			app.ReportNumber,
+		)
 	}
 
 	return BackupAndWrite(filePath, []byte(strings.Join(lines, "\n")))
 }
 
 // FormatTableLine formats an application as a markdown table row.
-func FormatTableLine(num int, date, company, role, score, status, pdf, report, notes string) string {
-	return fmt.Sprintf("| %d | %s | %s | %s | %s | %s | %s | %s | %s |",
-		num, date, company, role, score, status, pdf, report, notes)
+func FormatTableLine(
+	num int,
+	date, company, role, score, status, pdf, report, notes string,
+) string {
+	return fmt.Sprintf(
+		"| %d | %s | %s | %s | %s | %s | %s | %s | %s |",
+		num, date, company, role, score, status, pdf, report, notes,
+	)
 }

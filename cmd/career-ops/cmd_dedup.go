@@ -1,12 +1,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/samber/lo"
+	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 
 	"github.com/omarluq/career-ops/internal/states"
@@ -22,14 +25,18 @@ had a more advanced pipeline status, and merges notes. Creates a .bak backup bef
 	RunE: runDedup,
 }
 
+var (
+	dedupPath   string
+	dedupDryRun bool
+)
+
 func init() {
-	dedupCmd.Flags().String("path", ".", "path to career-ops root directory")
-	dedupCmd.Flags().Bool("dry-run", false, "preview changes without writing")
+	dedupCmd.Flags().StringVar(&dedupPath, "path", ".", "path to career-ops root directory")
+	dedupCmd.Flags().BoolVar(&dedupDryRun, "dry-run", false, "preview changes without writing")
 }
 
 // parsedEntry holds a parsed application line together with its original line index.
 type parsedEntry struct {
-	num     int
 	date    string
 	company string
 	role    string
@@ -38,8 +45,9 @@ type parsedEntry struct {
 	pdf     string
 	report  string
 	notes   string
-	lineIdx int
 	raw     string
+	num     int
+	lineIdx int
 }
 
 // parseTableLine splits a markdown table row into a parsedEntry.
@@ -78,39 +86,27 @@ func (e *parsedEntry) reformatLine() string {
 		e.num, e.date, e.company, e.role, e.score, e.status, e.pdf, e.report, e.notes)
 }
 
-func runDedup(cmd *cobra.Command, _ []string) error {
-	careerOpsPath, _ := cmd.Flags().GetString("path")
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
+func runDedup(_ *cobra.Command, _ []string) error {
+	careerOpsPath := dedupPath
 
 	states.Init(careerOpsPath)
 
 	appsFile, err := tracker.FindAppsFile(careerOpsPath)
 	if err != nil {
-		fmt.Println("No applications.md found. Nothing to dedup.")
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("No applications.md found. Nothing to dedup.")
+			return nil
+		}
+		return oops.Wrapf(err, "finding applications file")
 	}
 
-	content, err := os.ReadFile(appsFile)
+	content, err := os.ReadFile(filepath.Clean(appsFile))
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", appsFile, err)
+		return oops.Wrapf(err, "reading %s", appsFile)
 	}
 	lines := strings.Split(string(content), "\n")
 
-	// Parse all data rows, recording their line indices.
-	var entries []*parsedEntry
-	entryByNum := make(map[int]*parsedEntry)
-
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "|") {
-			continue
-		}
-		e := parseTableLine(line, i)
-		if e != nil {
-			entries = append(entries, e)
-			entryByNum[e.num] = e
-		}
-	}
-
+	entries := parseEntries(lines)
 	fmt.Printf("  %d entries loaded\n", len(entries))
 
 	// Group entries by normalized company key.
@@ -118,89 +114,14 @@ func runDedup(cmd *cobra.Command, _ []string) error {
 		return tracker.NormalizeCompanyKey(e.company)
 	})
 
-	// Track which line indices to remove.
-	linesToRemove := make(map[int]bool)
-	removed := 0
-
-	for _, companyEntries := range groups {
-		if len(companyEntries) < 2 {
-			continue
-		}
-
-		// Within the same company, cluster by role match.
-		processed := make(map[int]bool) // index into companyEntries
-		for i := 0; i < len(companyEntries); i++ {
-			if processed[i] {
-				continue
-			}
-			cluster := []*parsedEntry{companyEntries[i]}
-			processed[i] = true
-
-			for j := i + 1; j < len(companyEntries); j++ {
-				if processed[j] {
-					continue
-				}
-				if tracker.RoleMatch(companyEntries[i].role, companyEntries[j].role) {
-					cluster = append(cluster, companyEntries[j])
-					processed[j] = true
-				}
-			}
-
-			if len(cluster) < 2 {
-				continue
-			}
-
-			// Sort by score descending -- keeper is the highest-scored entry.
-			sort.Slice(cluster, func(a, b int) bool {
-				return tracker.ParseScore(cluster[a].score) > tracker.ParseScore(cluster[b].score)
-			})
-			keeper := cluster[0]
-
-			// Check if any duplicate has a more advanced pipeline status.
-			bestRank := states.StatusRank(keeper.status)
-			bestStatus := keeper.status
-			for _, dup := range cluster[1:] {
-				rank := states.StatusRank(dup.status)
-				if rank > bestRank {
-					bestRank = rank
-					bestStatus = dup.status
-				}
-			}
-
-			// Promote keeper's status if a removed entry was further along.
-			if bestStatus != keeper.status {
-				promoter := lo.Filter(cluster[1:], func(e *parsedEntry, _ int) bool {
-					return e.status == bestStatus
-				})
-				promoterNum := 0
-				if len(promoter) > 0 {
-					promoterNum = promoter[0].num
-				}
-				keeper.status = bestStatus
-				lines[keeper.lineIdx] = keeper.reformatLine()
-				fmt.Printf("  #%d: status promoted to %q (from #%d)\n", keeper.num, bestStatus, promoterNum)
-			}
-
-			// Mark duplicates for removal.
-			for _, dup := range cluster[1:] {
-				linesToRemove[dup.lineIdx] = true
-				removed++
-				fmt.Printf("  Remove #%d (%s -- %s, %s) -> kept #%d (%s)\n",
-					dup.num, dup.company, dup.role, dup.score, keeper.num, keeper.score)
-			}
-		}
-	}
+	linesToRemove, removed := findDuplicateClusters(groups, lines)
 
 	// Remove lines in reverse order to preserve indices.
-	indices := lo.Keys(linesToRemove)
-	sort.Sort(sort.Reverse(sort.IntSlice(indices)))
-	for _, idx := range indices {
-		lines = append(lines[:idx], lines[idx+1:]...)
-	}
+	lines = removeLines(lines, linesToRemove)
 
 	fmt.Printf("\n  %d duplicates removed\n", removed)
 
-	if dryRun {
+	if dedupDryRun {
 		fmt.Println("(dry-run -- no changes written)")
 		return nil
 	}
@@ -211,8 +132,130 @@ func runDedup(cmd *cobra.Command, _ []string) error {
 	}
 
 	if err := tracker.BackupAndWrite(appsFile, []byte(strings.Join(lines, "\n"))); err != nil {
-		return fmt.Errorf("writing %s: %w", appsFile, err)
+		return oops.Wrapf(err, "writing %s", appsFile)
 	}
 	fmt.Printf("  Written to %s (backup: %s.bak)\n", appsFile, appsFile)
 	return nil
+}
+
+// parseEntries scans all lines and returns parsed data rows.
+func parseEntries(lines []string) []*parsedEntry {
+	return lo.FilterMap(lo.Map(lines, lo.T2[string, int]), func(t lo.Tuple2[string, int], _ int) (*parsedEntry, bool) {
+		line, i := t.A, t.B
+		if !strings.HasPrefix(line, "|") {
+			return nil, false
+		}
+		if e := parseTableLine(line, i); e != nil {
+			return e, true
+		}
+		return nil, false
+	})
+}
+
+// findDuplicateClusters identifies duplicate entries within each company group,
+// promotes statuses where needed, and returns the set of line indices to remove
+// along with the total removal count.
+func findDuplicateClusters(
+	groups map[string][]*parsedEntry,
+	lines []string,
+) (linesToRemove map[int]bool, removed int) {
+	linesToRemove = make(map[int]bool)
+	removed = 0
+
+	for _, companyEntries := range groups {
+		if len(companyEntries) < 2 {
+			continue
+		}
+
+		clusters := buildRoleClusters(companyEntries)
+		for _, cluster := range clusters {
+			r := mergeCluster(cluster, lines)
+			for _, idx := range r {
+				linesToRemove[idx] = true
+				removed++
+			}
+		}
+	}
+	return linesToRemove, removed
+}
+
+// buildRoleClusters groups entries within a single company by role match.
+func buildRoleClusters(companyEntries []*parsedEntry) [][]*parsedEntry {
+	processed := make(map[int]bool)
+	var clusters [][]*parsedEntry
+
+	for i := 0; i < len(companyEntries); i++ {
+		if processed[i] {
+			continue
+		}
+		cluster := []*parsedEntry{companyEntries[i]}
+		processed[i] = true
+
+		for j := i + 1; j < len(companyEntries); j++ {
+			if processed[j] {
+				continue
+			}
+			if tracker.RoleMatch(companyEntries[i].role, companyEntries[j].role) {
+				cluster = append(cluster, companyEntries[j])
+				processed[j] = true
+			}
+		}
+
+		if len(cluster) >= 2 {
+			clusters = append(clusters, cluster)
+		}
+	}
+	return clusters
+}
+
+// mergeCluster processes a single duplicate cluster: picks the highest-scored keeper,
+// promotes status if needed, and returns the line indices of duplicates to remove.
+func mergeCluster(cluster []*parsedEntry, lines []string) []int {
+	// Sort by score descending -- keeper is the highest-scored entry.
+	sort.Slice(cluster, func(a, b int) bool {
+		return tracker.ParseScore(cluster[a].score) > tracker.ParseScore(cluster[b].score)
+	})
+	keeper := cluster[0]
+
+	// Check if any duplicate has a more advanced pipeline status.
+	bestRank := states.StatusRank(keeper.status)
+	bestStatus := keeper.status
+	for _, dup := range cluster[1:] {
+		rank := states.StatusRank(dup.status)
+		if rank > bestRank {
+			bestRank = rank
+			bestStatus = dup.status
+		}
+	}
+
+	// Promote keeper's status if a removed entry was further along.
+	if bestStatus != keeper.status {
+		promoter, found := lo.Find(cluster[1:], func(e *parsedEntry) bool {
+			return e.status == bestStatus
+		})
+		promoterNum := 0
+		if found {
+			promoterNum = promoter.num
+		}
+		keeper.status = bestStatus
+		lines[keeper.lineIdx] = keeper.reformatLine()
+		fmt.Printf("  #%d: status promoted to %q (from #%d)\n", keeper.num, bestStatus, promoterNum)
+	}
+
+	// Mark duplicates for removal.
+	return lo.Map(cluster[1:], func(dup *parsedEntry, _ int) int {
+		fmt.Printf("  Remove #%d (%s -- %s, %s) -> kept #%d (%s)\n",
+			dup.num, dup.company, dup.role, dup.score, keeper.num, keeper.score)
+		return dup.lineIdx
+	})
+}
+
+// removeLines removes the lines at the given indices, returning the filtered result.
+func removeLines(lines []string, toRemove map[int]bool) []string {
+	indices := lo.Keys(toRemove)
+	sort.Sort(sort.Reverse(sort.IntSlice(indices)))
+	for _, idx := range indices {
+		lines = append(lines[:idx], lines[idx+1:]...)
+	}
+	return lines
 }

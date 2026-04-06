@@ -1,30 +1,30 @@
+// Package model defines data types for the career-ops pipeline.
 package model
 
 // CareerApplication represents a single job application from the tracker.
 type CareerApplication struct {
-	Number       int
-	Date         string
+	ReportPath   string
+	ReportNumber string
 	Company      string
 	Role         string
 	Status       string
-	Score        float64
-	ScoreRaw     string
-	HasPDF       bool
-	ReportPath   string
-	ReportNumber string
-	Notes        string
-	JobURL       string // URL of the original job posting
-	// Enrichment (lazy loaded from report)
-	Archetype    string
-	TlDr         string
-	Remote       string
 	CompEstimate string
+	Date         string
+	ScoreRaw     string
+	Remote       string
+	TlDr         string
+	Notes        string
+	JobURL       string
+	Archetype    string
+	Number       int
+	Score        float64
+	HasPDF       bool
 }
 
 // PipelineMetrics holds aggregate stats for the pipeline dashboard.
 type PipelineMetrics struct {
-	Total      int
 	ByStatus   map[string]int
+	Total      int
 	AvgScore   float64
 	TopScore   float64
 	WithPDF    int

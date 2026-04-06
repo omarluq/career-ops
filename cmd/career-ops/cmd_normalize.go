@@ -1,31 +1,48 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/samber/oops"
+	"github.com/spf13/cobra"
+
 	"github.com/omarluq/career-ops/internal/states"
 	"github.com/omarluq/career-ops/internal/tracker"
-	"github.com/spf13/cobra"
 )
 
 var normalizeCmd = &cobra.Command{
 	Use:   "normalize",
 	Short: "Normalize status aliases to canonical statuses",
-	Long:  "Reads applications.md, maps non-canonical statuses to their canonical form, creates a .bak backup, and writes changes in-place.",
-	RunE:  runNormalize,
+	Long: "Reads applications.md, maps non-canonical statuses " +
+		"to their canonical form, creates a .bak backup, " +
+		"and writes changes in-place.",
+	RunE: runNormalize,
 }
+
+var (
+	normalizePath   string
+	normalizeDryRun bool
+)
 
 func init() {
-	normalizeCmd.Flags().String("path", ".", "path to career-ops root directory")
-	normalizeCmd.Flags().Bool("dry-run", false, "show changes without writing")
+	normalizeCmd.Flags().StringVar(
+		&normalizePath, "path", ".",
+		"path to career-ops root directory",
+	)
+	normalizeCmd.Flags().BoolVar(
+		&normalizeDryRun, "dry-run", false,
+		"show changes without writing",
+	)
 }
 
-func runNormalize(cmd *cobra.Command, args []string) error {
-	careerOpsPath, _ := cmd.Flags().GetString("path")
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
+func runNormalize(_ *cobra.Command, _ []string) error {
+	careerOpsPath := normalizePath
+	dryRun := normalizeDryRun
 
 	// Initialize states from YAML (falls back to defaults).
 	states.Init(careerOpsPath)
@@ -33,75 +50,20 @@ func runNormalize(cmd *cobra.Command, args []string) error {
 	// Locate applications.md.
 	filePath, err := tracker.FindAppsFile(careerOpsPath)
 	if err != nil {
-		fmt.Println("No applications.md found. Nothing to normalize.")
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("No applications.md found. Nothing to normalize.")
+			return nil
+		}
+		return oops.Wrapf(err, "finding applications file")
 	}
 
-	content, err := os.ReadFile(filePath)
+	content, err := os.ReadFile(filepath.Clean(filePath))
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", filePath, err)
+		return oops.Wrapf(err, "reading %s", filePath)
 	}
 
 	lines := strings.Split(string(content), "\n")
-	changes := 0
-	var unknowns []unknownStatus
-
-	for i, line := range lines {
-		if !strings.HasPrefix(line, "|") {
-			continue
-		}
-
-		parts := strings.Split(line, "|")
-		// Expect: ['', '#', 'date', 'company', 'role', 'score', 'STATUS', 'pdf', 'report', 'notes', '']
-		if len(parts) < 9 {
-			continue
-		}
-
-		// Skip header and separator rows.
-		col1 := strings.TrimSpace(parts[1])
-		if col1 == "#" || strings.HasPrefix(col1, "---") || col1 == "" {
-			continue
-		}
-		num, err := strconv.Atoi(strings.TrimSpace(col1))
-		if err != nil {
-			continue
-		}
-
-		rawStatus := strings.TrimSpace(parts[6])
-
-		// Normalize via states package.
-		normalizedID := states.Normalize(rawStatus)
-
-		// Check if the result maps to a known canonical ID.
-		if !states.IsCanonical(normalizedID) {
-			unknowns = append(unknowns, unknownStatus{num: num, raw: rawStatus, line: i + 1})
-			continue
-		}
-
-		label := states.Label(normalizedID)
-		if label == rawStatus {
-			continue // Already canonical, no change needed.
-		}
-
-		oldStatus := rawStatus
-		parts[6] = " " + label + " "
-
-		// Handle special patterns: move duplicado/repost info to notes.
-		lowerRaw := strings.ToLower(strings.TrimSpace(rawStatus))
-		if strings.HasPrefix(lowerRaw, "duplicado") || strings.HasPrefix(lowerRaw, "dup") || strings.HasPrefix(lowerRaw, "repost") {
-			moveToNotes(parts, rawStatus)
-		}
-
-		// Strip markdown bold from score field (parts[5]).
-		if strings.Contains(parts[5], "**") {
-			parts[5] = " " + strings.ReplaceAll(strings.TrimSpace(parts[5]), "**", "") + " "
-		}
-
-		lines[i] = strings.Join(parts, "|")
-		changes++
-
-		fmt.Printf("#%d: %q -> %q\n", num, oldStatus, label)
-	}
+	changes, unknowns := processNormalization(lines)
 
 	if len(unknowns) > 0 {
 		fmt.Printf("\nWarning: %d unknown statuses:\n", len(unknowns))
@@ -124,10 +86,108 @@ func runNormalize(cmd *cobra.Command, args []string) error {
 
 	output := []byte(strings.Join(lines, "\n"))
 	if err := tracker.BackupAndWrite(filePath, output); err != nil {
-		return fmt.Errorf("writing %s: %w", filePath, err)
+		return oops.Wrapf(err, "writing %s", filePath)
 	}
 	fmt.Printf("Written to %s (backup: %s.bak)\n", filePath, filePath)
 	return nil
+}
+
+// processNormalization iterates over lines, normalizing statuses in-place.
+// Returns the count of changes made and any unknown statuses encountered.
+func processNormalization(
+	lines []string,
+) (int, []unknownStatus) {
+	changes := 0
+	var unknowns []unknownStatus
+
+	for i, line := range lines {
+		changed, unk := normalizeAppLine(lines, i, line)
+		if changed {
+			changes++
+		}
+		if unk != nil {
+			unknowns = append(unknowns, *unk)
+		}
+	}
+	return changes, unknowns
+}
+
+// parseDataRow extracts parts and entry number from a table data row.
+// Returns nil parts if the line is not a valid data row.
+func parseDataRow(line string) (parts []string, num int) {
+	if !strings.HasPrefix(line, "|") {
+		return nil, 0
+	}
+
+	parts = strings.Split(line, "|")
+	if len(parts) < 9 {
+		return nil, 0
+	}
+
+	// Skip header and separator rows.
+	col1 := strings.TrimSpace(parts[1])
+	if col1 == "#" || strings.HasPrefix(col1, "---") || col1 == "" {
+		return nil, 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(col1))
+	if err != nil {
+		return nil, 0
+	}
+	return parts, n
+}
+
+// cleanFields handles special status patterns and bold score cleanup.
+func cleanFields(parts []string, rawStatus string) {
+	// Handle special patterns: move duplicado/repost info to notes.
+	lowerRaw := strings.ToLower(strings.TrimSpace(rawStatus))
+	if strings.HasPrefix(lowerRaw, "duplicado") ||
+		strings.HasPrefix(lowerRaw, "dup") ||
+		strings.HasPrefix(lowerRaw, "repost") {
+		moveToNotes(parts, rawStatus)
+	}
+
+	// Strip markdown bold from score field (parts[5]).
+	if strings.Contains(parts[5], "**") {
+		score := strings.ReplaceAll(
+			strings.TrimSpace(parts[5]), "**", "",
+		)
+		parts[5] = " " + score + " "
+	}
+}
+
+// normalizeAppLine processes a single line, returning whether it was changed
+// and any unknown status found. Modifies lines[idx] in-place if normalized.
+func normalizeAppLine(
+	lines []string, idx int, line string,
+) (bool, *unknownStatus) {
+	parts, num := parseDataRow(line)
+	if parts == nil {
+		return false, nil
+	}
+
+	rawStatus := strings.TrimSpace(parts[6])
+	normalizedID := states.Normalize(rawStatus)
+
+	if !states.IsCanonical(normalizedID) {
+		return false, &unknownStatus{
+			num: num, raw: rawStatus, line: idx + 1,
+		}
+	}
+
+	label := states.Label(normalizedID)
+	if label == rawStatus {
+		return false, nil
+	}
+
+	oldStatus := rawStatus
+	parts[6] = " " + label + " "
+
+	cleanFields(parts, rawStatus)
+
+	lines[idx] = strings.Join(parts, "|")
+
+	fmt.Printf("#%d: %q -> %q\n", num, oldStatus, label)
+	return true, nil
 }
 
 // moveToNotes appends the raw status text to the notes column if not already present.
@@ -145,7 +205,7 @@ func moveToNotes(parts []string, rawStatus string) {
 }
 
 type unknownStatus struct {
-	num  int
 	raw  string
+	num  int
 	line int
 }

@@ -1,7 +1,6 @@
 package screens
 
 import (
-	"fmt"
 	"os"
 	"strings"
 
@@ -12,35 +11,60 @@ import (
 	"github.com/omarluq/career-ops/internal/ui/theme"
 )
 
+// Key constants to avoid magic strings.
+const (
+	viewerKeyEsc    = "esc"
+	viewerKeyDown   = "down"
+	viewerKeyUp     = "up"
+	viewerKeyQ      = "q"
+	viewerKeyJ      = "j"
+	viewerKeyK      = "k"
+	viewerKeyPgDown = "pgdown"
+	viewerKeyPgUp   = "pgup"
+	viewerKeyCtrlD  = "ctrl+d"
+	viewerKeyCtrlU  = "ctrl+u"
+	viewerKeyHome   = "home"
+	viewerKeyEnd    = "end"
+	viewerKeyG      = "g"
+	viewerKeyGUpper = "G"
+)
+
 // ViewerClosedMsg is emitted when the viewer is dismissed.
 type ViewerClosedMsg struct{}
 
+// markdownRenderedMsg carries the rendered lines back to the model.
+type markdownRenderedMsg struct {
+	lines []string
+}
+
 // ViewerModel implements an integrated file viewer screen.
 type ViewerModel struct {
+	theme        theme.Theme
 	lines        []string
-	title        string
 	scrollOffset int
 	width        int
 	height       int
-	theme        theme.Theme
+	loading      bool
 }
 
-// NewViewerModel creates a new file viewer for the given path.
-func NewViewerModel(t theme.Theme, path, title string, width, height int) ViewerModel {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		content = []byte("Error reading file: " + err.Error())
+// NewViewerWithPath returns a model and a Cmd that renders markdown in the background.
+func NewViewerWithPath(t *theme.Theme, path string, width, height int) (ViewerModel, tea.Cmd) {
+	m := ViewerModel{
+		width:   width,
+		height:  height,
+		theme:   *t,
+		loading: true,
+		lines:   []string{"Loading..."},
 	}
-
-	rendered := renderMarkdown(string(content), width)
-
-	return ViewerModel{
-		lines:  strings.Split(rendered, "\n"),
-		title:  title,
-		width:  width,
-		height: height,
-		theme:  t,
+	cmd := func() tea.Msg {
+		content, err := os.ReadFile(path) //nolint:gosec // G304: path from trusted internal source
+		if err != nil {
+			return markdownRenderedMsg{lines: []string{"Error: " + err.Error()}}
+		}
+		rendered := renderMarkdown(string(content), width)
+		return markdownRenderedMsg{lines: strings.Split(rendered, "\n")}
 	}
+	return m, cmd
 }
 
 func renderMarkdown(src string, width int) string {
@@ -49,7 +73,7 @@ func renderMarkdown(src string, width int) string {
 		w = 40
 	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStylePath("dark"),
 		glamour.WithWordWrap(w),
 	)
 	if err != nil {
@@ -63,6 +87,8 @@ func renderMarkdown(src string, width int) string {
 }
 
 // Init implements tea.Model.
+//
+//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m ViewerModel) Init() tea.Cmd {
 	return nil
 }
@@ -74,55 +100,17 @@ func (m *ViewerModel) Resize(width, height int) {
 }
 
 // Update handles input for the viewer screen.
+//
+//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m ViewerModel) Update(msg tea.Msg) (ViewerModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case markdownRenderedMsg:
+		m.lines = msg.lines
+		m.loading = false
+		return m, nil
+
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc":
-			return m, func() tea.Msg { return ViewerClosedMsg{} }
-
-		case "down", "j":
-			maxScroll := len(m.lines) - m.bodyHeight()
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			if m.scrollOffset < maxScroll {
-				m.scrollOffset++
-			}
-
-		case "up", "k":
-			if m.scrollOffset > 0 {
-				m.scrollOffset--
-			}
-
-		case "pgdown", "ctrl+d":
-			jump := m.bodyHeight() / 2
-			maxScroll := len(m.lines) - m.bodyHeight()
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			m.scrollOffset += jump
-			if m.scrollOffset > maxScroll {
-				m.scrollOffset = maxScroll
-			}
-
-		case "pgup", "ctrl+u":
-			jump := m.bodyHeight() / 2
-			m.scrollOffset -= jump
-			if m.scrollOffset < 0 {
-				m.scrollOffset = 0
-			}
-
-		case "home", "g":
-			m.scrollOffset = 0
-
-		case "end", "G":
-			maxScroll := len(m.lines) - m.bodyHeight()
-			if maxScroll < 0 {
-				maxScroll = 0
-			}
-			m.scrollOffset = maxScroll
-		}
+		return m.handleViewerKeys(msg)
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -132,8 +120,65 @@ func (m ViewerModel) Update(msg tea.Msg) (ViewerModel, tea.Cmd) {
 	return m, nil
 }
 
-func (m ViewerModel) bodyHeight() int {
-	h := m.height - 4
+//nolint:gocritic // hugeParam: required by tea.Model interface (called from Update)
+func (m ViewerModel) handleViewerKeys(msg tea.KeyMsg) (ViewerModel, tea.Cmd) {
+	switch msg.String() {
+	case viewerKeyQ, viewerKeyEsc:
+		return m, func() tea.Msg { return ViewerClosedMsg{} }
+	case viewerKeyDown, viewerKeyJ:
+		m.scrollDown()
+	case viewerKeyUp, viewerKeyK:
+		m.scrollUp()
+	case viewerKeyPgDown, viewerKeyCtrlD:
+		m.pageDown()
+	case viewerKeyPgUp, viewerKeyCtrlU:
+		m.pageUp()
+	case viewerKeyHome, viewerKeyG:
+		m.scrollOffset = 0
+	case viewerKeyEnd, viewerKeyGUpper:
+		m.scrollOffset = m.maxScroll()
+	}
+	return m, nil
+}
+
+func (m *ViewerModel) maxScroll() int {
+	ms := len(m.lines) - m.bodyHeight()
+	if ms < 0 {
+		return 0
+	}
+	return ms
+}
+
+func (m *ViewerModel) scrollDown() {
+	if m.scrollOffset < m.maxScroll() {
+		m.scrollOffset++
+	}
+}
+
+func (m *ViewerModel) scrollUp() {
+	if m.scrollOffset > 0 {
+		m.scrollOffset--
+	}
+}
+
+func (m *ViewerModel) pageDown() {
+	jump := m.bodyHeight() / 2
+	m.scrollOffset += jump
+	if m.scrollOffset > m.maxScroll() {
+		m.scrollOffset = m.maxScroll()
+	}
+}
+
+func (m *ViewerModel) pageUp() {
+	jump := m.bodyHeight() / 2
+	m.scrollOffset -= jump
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
+}
+
+func (m *ViewerModel) bodyHeight() int {
+	h := m.height - 2 // footer only, no header
 	if h < 3 {
 		h = 3
 	}
@@ -141,52 +186,16 @@ func (m ViewerModel) bodyHeight() int {
 }
 
 // View renders the viewer screen.
+//
+//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m ViewerModel) View() string {
-	header := m.renderHeader()
 	body := m.renderBody()
 	footer := m.renderFooter()
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	return lipgloss.JoinVertical(lipgloss.Left, body, footer)
 }
 
-func (m ViewerModel) renderHeader() string {
-	style := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(m.theme.Text).
-		Background(m.theme.Surface).
-		Width(m.width).
-		Padding(0, 2)
-
-	title := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Blue).Render(m.title)
-
-	right := lipgloss.NewStyle().Foreground(m.theme.Subtext)
-	scroll := right.Render(func() string {
-		if len(m.lines) == 0 {
-			return ""
-		}
-		maxScroll := len(m.lines) - m.bodyHeight()
-		if maxScroll <= 0 {
-			return "All"
-		}
-		if m.scrollOffset == 0 {
-			return "Top"
-		}
-		if m.scrollOffset >= maxScroll {
-			return "End"
-		}
-		pct := m.scrollOffset * 100 / maxScroll
-		return fmt.Sprintf("%d%%", pct)
-	}())
-
-	gap := m.width - lipgloss.Width(m.title) - lipgloss.Width(scroll) - 4
-	if gap < 1 {
-		gap = 1
-	}
-
-	return style.Render(title + strings.Repeat(" ", gap) + scroll)
-}
-
-func (m ViewerModel) renderBody() string {
+func (m *ViewerModel) renderBody() string {
 	bh := m.bodyHeight()
 	padStyle := lipgloss.NewStyle().Padding(0, 2)
 
@@ -208,7 +217,7 @@ func (m ViewerModel) renderBody() string {
 	return padStyle.Render(strings.Join(visible, "\n"))
 }
 
-func (m ViewerModel) renderFooter() string {
+func (m *ViewerModel) renderFooter() string {
 	style := lipgloss.NewStyle().
 		Foreground(m.theme.Subtext).
 		Background(m.theme.Surface).

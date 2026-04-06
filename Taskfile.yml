@@ -47,12 +47,6 @@ tasks:
     cmds:
       - mkdir -p {{.BUILD_DIR}}
       - go build -ldflags "{{.LDFLAGS}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.CMD_PKG}}
-    sources:
-      - "**/*.go"
-      - go.mod
-      - go.sum
-    generates:
-      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
 
   install:
     desc: Install binary into $GOPATH/bin

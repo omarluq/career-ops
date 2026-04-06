@@ -1,3 +1,4 @@
+// Package screens implements Bubble Tea screen models for the TUI dashboard.
 package screens
 
 import (
@@ -38,8 +39,8 @@ type PipelineLoadReportMsg struct {
 // PipelineUpdateStatusMsg requests a status update for an application.
 type PipelineUpdateStatusMsg struct {
 	CareerOpsPath string
-	App           model.CareerApplication
 	NewStatus     string
+	App           model.CareerApplication
 }
 
 type reportSummary struct {
@@ -67,6 +68,16 @@ const (
 	filterTop       = "top"
 )
 
+// View mode constant.
+const viewGrouped = "grouped"
+
+// Key constants for pipeline keys.
+const (
+	pipelineKeyDown  = "down"
+	pipelineKeyUp    = "up"
+	pipelineKeyEnter = "enter"
+)
+
 type pipelineTab struct {
 	filter string
 	label  string
@@ -86,38 +97,47 @@ var sortCycle = []string{sortScore, sortDate, sortCompany, sortStatus}
 var statusOptions = []string{"Evaluated", "Applied", "Responded", "Interview", "Offer", "Rejected", "Discarded", "SKIP"}
 
 // statusGroupOrder defines display order for grouped view.
-var statusGroupOrder = []string{"interview", "offer", "responded", "applied", "evaluated", "skip", "rejected", "discarded"}
+var statusGroupOrder = []string{
+	"interview", "offer", "responded", "applied",
+	"evaluated", "skip", "rejected", "discarded",
+}
 
 // PipelineModel implements the career pipeline dashboard screen.
 type PipelineModel struct {
-	apps          []model.CareerApplication
-	filtered      []model.CareerApplication
-	metrics       model.PipelineMetrics
-	cursor        int
-	scrollOffset  int
-	sortMode      string
-	activeTab     int
-	viewMode      string // "grouped" or "flat"
-	width, height int
+	reportCache   map[string]reportSummary
 	theme         theme.Theme
 	careerOpsPath string
-	reportCache   map[string]reportSummary
-	// Status picker sub-state
-	statusPicker bool
-	statusCursor int
+	sortMode      string
+	viewMode      string
+	filtered      []model.CareerApplication
+	apps          []model.CareerApplication
+	metrics       model.PipelineMetrics
+	activeTab     int
+	height        int
+	width         int
+	scrollOffset  int
+	cursor        int
+	statusCursor  int
+	statusPicker  bool
 }
 
 // NewPipelineModel creates a new pipeline screen.
-func NewPipelineModel(t theme.Theme, apps []model.CareerApplication, metrics model.PipelineMetrics, careerOpsPath string, width, height int) PipelineModel {
+func NewPipelineModel(
+	t *theme.Theme,
+	apps []model.CareerApplication,
+	metrics model.PipelineMetrics,
+	careerOpsPath string,
+	width, height int,
+) PipelineModel {
 	m := PipelineModel{
 		apps:          apps,
 		metrics:       metrics,
 		sortMode:      sortScore,
 		activeTab:     0,
-		viewMode:      "grouped",
+		viewMode:      viewGrouped,
 		width:         width,
 		height:        height,
-		theme:         t,
+		theme:         *t,
 		careerOpsPath: careerOpsPath,
 		reportCache:   make(map[string]reportSummary),
 	}
@@ -126,6 +146,8 @@ func NewPipelineModel(t theme.Theme, apps []model.CareerApplication, metrics mod
 }
 
 // Init implements tea.Model.
+//
+//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m PipelineModel) Init() tea.Cmd {
 	return nil
 }
@@ -137,10 +159,10 @@ func (m *PipelineModel) Resize(width, height int) {
 }
 
 // Width returns the current width.
-func (m PipelineModel) Width() int { return m.width }
+func (m *PipelineModel) Width() int { return m.width }
 
 // Height returns the current height.
-func (m PipelineModel) Height() int { return m.height }
+func (m *PipelineModel) Height() int { return m.height }
 
 // CopyReportCache copies the report cache from another pipeline model.
 func (m *PipelineModel) CopyReportCache(other *PipelineModel) {
@@ -160,7 +182,7 @@ func (m *PipelineModel) EnrichReport(reportPath, archetype, tldr, remote, comp s
 }
 
 // CurrentApp returns the currently selected application, if any.
-func (m PipelineModel) CurrentApp() (model.CareerApplication, bool) {
+func (m *PipelineModel) CurrentApp() (model.CareerApplication, bool) {
 	if m.cursor < 0 || m.cursor >= len(m.filtered) {
 		return model.CareerApplication{}, false
 	}
@@ -168,6 +190,8 @@ func (m PipelineModel) CurrentApp() (model.CareerApplication, bool) {
 }
 
 // Update handles input for the pipeline screen.
+//
+//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m PipelineModel) Update(msg tea.Msg) (PipelineModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -183,12 +207,29 @@ func (m PipelineModel) Update(msg tea.Msg) (PipelineModel, tea.Cmd) {
 	return m, nil
 }
 
+// handleKey dispatches key messages to specialized handlers.
+//
+//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
 		return m, func() tea.Msg { return PipelineClosedMsg{} }
+	case pipelineKeyDown, pipelineKeyUp, "pgdown", "ctrl+d", "pgup", "ctrl+u":
+		return m.handleNavKeys(msg)
+	case "s", "f", "right", "left":
+		return m.handleFilterKeys(msg)
+	case "v", pipelineKeyEnter, "o", "c":
+		return m.handleActionKeys(msg)
+	}
+	return m, nil
+}
 
-	case "down":
+// handleNavKeys handles cursor movement and scrolling keys.
+//
+//nolint:gocritic // hugeParam: required by tea.Model interface
+func (m PipelineModel) handleNavKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
+	switch msg.String() {
+	case pipelineKeyDown:
 		if len(m.filtered) > 0 {
 			m.cursor++
 			if m.cursor >= len(m.filtered) {
@@ -198,7 +239,7 @@ func (m PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 			return m, m.loadCurrentReport()
 		}
 
-	case "up":
+	case pipelineKeyUp:
 		if len(m.filtered) > 0 {
 			m.cursor--
 			if m.cursor < 0 {
@@ -208,6 +249,26 @@ func (m PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 			return m, m.loadCurrentReport()
 		}
 
+	case "pgdown", "ctrl+d":
+		m.scrollOffset += m.height / 2
+		return m, nil
+
+	case "pgup", "ctrl+u":
+		m.scrollOffset -= m.height / 2
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
+		}
+		return m, nil
+	}
+
+	return m, nil
+}
+
+// handleFilterKeys handles sort, filter, and tab switching keys.
+//
+//nolint:gocritic // hugeParam: required by tea.Model interface
+func (m PipelineModel) handleFilterKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
+	switch msg.String() {
 	case "s":
 		for i, s := range sortCycle {
 			if s == m.sortMode {
@@ -236,71 +297,82 @@ func (m PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 		m.applyFilterAndSort()
 		m.cursor = 0
 		m.scrollOffset = 0
-
-	case "v":
-		if m.viewMode == "grouped" {
-			m.viewMode = "flat"
-		} else {
-			m.viewMode = "grouped"
-		}
-
-	case "enter":
-		if app, ok := m.CurrentApp(); ok && app.ReportPath != "" {
-			fullPath := filepath.Join(m.careerOpsPath, app.ReportPath)
-			title := fmt.Sprintf("%s \u2014 %s", app.Company, app.Role)
-			jobURL := app.JobURL
-			return m, func() tea.Msg {
-				return PipelineOpenReportMsg{Path: fullPath, Title: title, JobURL: jobURL}
-			}
-		}
-
-	case "o":
-		if app, ok := m.CurrentApp(); ok && app.JobURL != "" {
-			return m, func() tea.Msg {
-				return PipelineOpenURLMsg{URL: app.JobURL}
-			}
-		}
-
-	case "c":
-		if len(m.filtered) > 0 {
-			m.statusPicker = true
-			m.statusCursor = 0
-		}
-
-	case "pgdown", "ctrl+d":
-		m.scrollOffset += m.height / 2
-		return m, nil
-
-	case "pgup", "ctrl+u":
-		m.scrollOffset -= m.height / 2
-		if m.scrollOffset < 0 {
-			m.scrollOffset = 0
-		}
-		return m, nil
 	}
 
 	return m, nil
 }
 
+// handleActionKeys handles view toggle, report open, URL open, and status change keys.
+//
+//nolint:gocritic // hugeParam: required by tea.Model interface
+func (m PipelineModel) handleActionKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
+	switch msg.String() {
+	case "v":
+		m.toggleViewMode()
+	case pipelineKeyEnter:
+		return m.openReport()
+	case "o":
+		return m.openJobURL()
+	case "c":
+		if len(m.filtered) > 0 {
+			m.statusPicker = true
+			m.statusCursor = 0
+		}
+	}
+	return m, nil
+}
+
+func (m *PipelineModel) toggleViewMode() {
+	if m.viewMode == viewGrouped {
+		m.viewMode = "flat"
+	} else {
+		m.viewMode = viewGrouped
+	}
+}
+
+//nolint:gocritic // hugeParam: called from value-receiver chain
+func (m PipelineModel) openReport() (PipelineModel, tea.Cmd) {
+	if app, ok := m.CurrentApp(); ok && app.ReportPath != "" {
+		fullPath := filepath.Join(m.careerOpsPath, app.ReportPath)
+		title := fmt.Sprintf("%s \u2014 %s", app.Company, app.Role)
+		jobURL := app.JobURL
+		return m, func() tea.Msg {
+			return PipelineOpenReportMsg{Path: fullPath, Title: title, JobURL: jobURL}
+		}
+	}
+	return m, nil
+}
+
+//nolint:gocritic // hugeParam: called from value-receiver chain
+func (m PipelineModel) openJobURL() (PipelineModel, tea.Cmd) {
+	if app, ok := m.CurrentApp(); ok && app.JobURL != "" {
+		return m, func() tea.Msg {
+			return PipelineOpenURLMsg{URL: app.JobURL}
+		}
+	}
+	return m, nil
+}
+
+//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m PipelineModel) handleStatusPicker(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q":
 		m.statusPicker = false
 		return m, nil
 
-	case "down":
+	case pipelineKeyDown:
 		m.statusCursor++
 		if m.statusCursor >= len(statusOptions) {
 			m.statusCursor = len(statusOptions) - 1
 		}
 
-	case "up":
+	case pipelineKeyUp:
 		m.statusCursor--
 		if m.statusCursor < 0 {
 			m.statusCursor = 0
 		}
 
-	case "enter":
+	case pipelineKeyEnter:
 		m.statusPicker = false
 		if app, ok := m.CurrentApp(); ok {
 			newStatus := statusOptions[m.statusCursor]
@@ -316,7 +388,7 @@ func (m PipelineModel) handleStatusPicker(msg tea.KeyMsg) (PipelineModel, tea.Cm
 	return m, nil
 }
 
-func (m PipelineModel) loadCurrentReport() tea.Cmd {
+func (m *PipelineModel) loadCurrentReport() tea.Cmd {
 	app, ok := m.CurrentApp()
 	if !ok || app.ReportPath == "" {
 		return nil
@@ -333,67 +405,88 @@ func (m PipelineModel) loadCurrentReport() tea.Cmd {
 
 // applyFilterAndSort rebuilds the filtered list from apps.
 func (m *PipelineModel) applyFilterAndSort() {
+	m.filtered = m.filterApps()
+	m.sortApps()
+}
+
+// filterApps returns the subset of apps matching the active tab filter.
+func (m *PipelineModel) filterApps() []model.CareerApplication {
 	var filtered []model.CareerApplication
 
 	currentFilter := pipelineTabs[m.activeTab].filter
-	for _, app := range m.apps {
+	for i := range m.apps {
+		app := &m.apps[i]
 		norm := states.Normalize(app.Status)
 		switch currentFilter {
 		case filterAll:
-			filtered = append(filtered, app)
+			filtered = append(filtered, *app)
 		case filterTop:
 			if app.Score >= 4.0 && norm != "no_aplicar" {
-				filtered = append(filtered, app)
+				filtered = append(filtered, *app)
 			}
 		default:
 			if norm == currentFilter {
-				filtered = append(filtered, app)
+				filtered = append(filtered, *app)
 			}
 		}
 	}
 
-	// Sort
+	return filtered
+}
+
+// sortApps sorts m.filtered in place according to the current sort and view mode.
+func (m *PipelineModel) sortApps() {
+	m.sortByMode()
+
+	if m.viewMode == viewGrouped {
+		m.sortGrouped()
+	}
+}
+
+// sortByMode applies a flat sort based on the current sort mode.
+func (m *PipelineModel) sortByMode() {
 	switch m.sortMode {
 	case sortScore:
-		sort.SliceStable(filtered, func(i, j int) bool {
-			return filtered[i].Score > filtered[j].Score
+		sort.SliceStable(m.filtered, func(i, j int) bool {
+			return m.filtered[i].Score > m.filtered[j].Score
 		})
 	case sortDate:
-		sort.SliceStable(filtered, func(i, j int) bool {
-			return filtered[i].Date > filtered[j].Date
+		sort.SliceStable(m.filtered, func(i, j int) bool {
+			return m.filtered[i].Date > m.filtered[j].Date
 		})
 	case sortCompany:
-		sort.SliceStable(filtered, func(i, j int) bool {
-			return strings.ToLower(filtered[i].Company) < strings.ToLower(filtered[j].Company)
+		sort.SliceStable(m.filtered, func(i, j int) bool {
+			return strings.ToLower(m.filtered[i].Company) < strings.ToLower(m.filtered[j].Company)
 		})
 	case sortStatus:
-		sort.SliceStable(filtered, func(i, j int) bool {
-			return states.Priority(filtered[i].Status) < states.Priority(filtered[j].Status)
+		sort.SliceStable(m.filtered, func(i, j int) bool {
+			return states.Priority(m.filtered[i].Status) < states.Priority(m.filtered[j].Status)
 		})
 	}
+}
 
-	// In grouped mode, always sort by status priority first, then by selected sort within groups
-	if m.viewMode == "grouped" {
-		sort.SliceStable(filtered, func(i, j int) bool {
-			pi := states.Priority(filtered[i].Status)
-			pj := states.Priority(filtered[j].Status)
-			if pi != pj {
-				return pi < pj
-			}
-			switch m.sortMode {
-			case sortScore:
-				return filtered[i].Score > filtered[j].Score
-			case sortDate:
-				return filtered[i].Date > filtered[j].Date
-			case sortCompany:
-				return strings.ToLower(filtered[i].Company) < strings.ToLower(filtered[j].Company)
-			default:
-				return filtered[i].Score > filtered[j].Score
-			}
-		})
+// sortGrouped re-sorts by status priority first, then by the selected sort within groups.
+func (m *PipelineModel) sortGrouped() {
+	sort.SliceStable(m.filtered, func(i, j int) bool {
+		pi := states.Priority(m.filtered[i].Status)
+		pj := states.Priority(m.filtered[j].Status)
+		if pi != pj {
+			return pi < pj
+		}
+		return m.compareByMode(i, j)
+	})
+}
+
+// compareByMode compares two filtered apps using the current sort mode.
+func (m *PipelineModel) compareByMode(i, j int) bool {
+	switch m.sortMode {
+	case sortDate:
+		return m.filtered[i].Date > m.filtered[j].Date
+	case sortCompany:
+		return strings.ToLower(m.filtered[i].Company) < strings.ToLower(m.filtered[j].Company)
+	default:
+		return m.filtered[i].Score > m.filtered[j].Score
 	}
-
-	m.filtered = filtered
 }
 
 // adjustScroll updates scrollOffset so the cursor stays visible.
@@ -416,13 +509,14 @@ func (m *PipelineModel) adjustScroll() {
 	}
 }
 
-func (m PipelineModel) cursorLineEstimate() int {
-	if m.viewMode != "grouped" {
+func (m *PipelineModel) cursorLineEstimate() int {
+	if m.viewMode != viewGrouped {
 		return m.cursor
 	}
 	line := 0
 	prevStatus := ""
-	for i, app := range m.filtered {
+	for i := range m.filtered {
+		app := &m.filtered[i]
 		norm := states.Normalize(app.Status)
 		if norm != prevStatus {
 			line++
@@ -439,6 +533,8 @@ func (m PipelineModel) cursorLineEstimate() int {
 // -- View --
 
 // View renders the pipeline screen.
+//
+//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m PipelineModel) View() string {
 	header := m.renderHeader()
 	tabs := m.renderTabs()
@@ -478,7 +574,7 @@ func (m PipelineModel) View() string {
 	)
 }
 
-func (m PipelineModel) renderHeader() string {
+func (m *PipelineModel) renderHeader() string {
 	style := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(m.theme.Text).
@@ -499,7 +595,7 @@ func (m PipelineModel) renderHeader() string {
 	return style.Render(title + strings.Repeat(" ", gap) + info)
 }
 
-func (m PipelineModel) renderTabs() string {
+func (m *PipelineModel) renderTabs() string {
 	var tabs []string
 	var underParts []string
 
@@ -530,9 +626,10 @@ func (m PipelineModel) renderTabs() string {
 	return padStyle.Render(row) + "\n" + padStyle.Render(underline)
 }
 
-func (m PipelineModel) countForFilter(filter string) int {
+func (m *PipelineModel) countForFilter(filter string) int {
 	count := 0
-	for _, app := range m.apps {
+	for i := range m.apps {
+		app := &m.apps[i]
 		norm := states.Normalize(app.Status)
 		switch filter {
 		case filterAll:
@@ -550,7 +647,7 @@ func (m PipelineModel) countForFilter(filter string) int {
 	return count
 }
 
-func (m PipelineModel) renderMetrics() string {
+func (m *PipelineModel) renderMetrics() string {
 	style := lipgloss.NewStyle().
 		Background(m.theme.Surface).
 		Width(m.width).
@@ -572,7 +669,7 @@ func (m PipelineModel) renderMetrics() string {
 	return style.Render(strings.Join(parts, "  "))
 }
 
-func (m PipelineModel) renderSortBar() string {
+func (m *PipelineModel) renderSortBar() string {
 	style := lipgloss.NewStyle().
 		Foreground(m.theme.Subtext).
 		Width(m.width).
@@ -585,7 +682,7 @@ func (m PipelineModel) renderSortBar() string {
 	return style.Render(fmt.Sprintf("%s  %s  %s", sortLabel, viewLabel, count))
 }
 
-func (m PipelineModel) renderBody() string {
+func (m *PipelineModel) renderBody() string {
 	if len(m.filtered) == 0 {
 		emptyStyle := lipgloss.NewStyle().
 			Foreground(m.theme.Subtext).
@@ -597,10 +694,11 @@ func (m PipelineModel) renderBody() string {
 	prevStatus := ""
 	padStyle := lipgloss.NewStyle().Padding(0, 2)
 
-	for i, app := range m.filtered {
+	for i := range m.filtered {
+		app := &m.filtered[i]
 		norm := states.Normalize(app.Status)
 
-		if m.viewMode == "grouped" && norm != prevStatus {
+		if m.viewMode == viewGrouped && norm != prevStatus {
 			count := m.countByNormStatus(norm)
 			headerStyle := lipgloss.NewStyle().
 				Bold(true).
@@ -621,7 +719,7 @@ func (m PipelineModel) renderBody() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m PipelineModel) renderAppLine(app model.CareerApplication, selected bool) string {
+func (m *PipelineModel) renderAppLine(app *model.CareerApplication, selected bool) string {
 	padStyle := lipgloss.NewStyle().Padding(0, 2)
 
 	scoreW := 5
@@ -680,7 +778,7 @@ func (m PipelineModel) renderAppLine(app model.CareerApplication, selected bool)
 	return padStyle.Render(line)
 }
 
-func (m PipelineModel) renderPreview() string {
+func (m *PipelineModel) renderPreview() string {
 	app, ok := m.CurrentApp()
 	if !ok {
 		return ""
@@ -726,7 +824,7 @@ func (m PipelineModel) renderPreview() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m PipelineModel) renderHelp() string {
+func (m *PipelineModel) renderHelp() string {
 	style := lipgloss.NewStyle().
 		Foreground(m.theme.Subtext).
 		Background(m.theme.Surface).
@@ -762,7 +860,7 @@ func (m PipelineModel) renderHelp() string {
 	return style.Render(keys + strings.Repeat(" ", gap) + brand)
 }
 
-func (m PipelineModel) overlayStatusPicker(body string) string {
+func (m *PipelineModel) overlayStatusPicker(body string) string {
 	bodyLines := strings.Split(body, "\n")
 
 	pickerWidth := 30
@@ -771,7 +869,7 @@ func (m PipelineModel) overlayStatusPicker(body string) string {
 		Foreground(m.theme.Blue).
 		Bold(true)
 
-	var picker []string
+	picker := make([]string, 0, 1+len(statusOptions))
 	picker = append(picker, padStyle.Render(borderStyle.Render("Change status:")))
 
 	for i, opt := range statusOptions {
@@ -792,7 +890,7 @@ func (m PipelineModel) overlayStatusPicker(body string) string {
 
 // -- Helpers --
 
-func (m PipelineModel) scoreStyle(score float64) lipgloss.Style {
+func (m *PipelineModel) scoreStyle(score float64) lipgloss.Style {
 	switch {
 	case score >= 4.2:
 		return lipgloss.NewStyle().Foreground(m.theme.Green).Bold(true)
@@ -805,7 +903,7 @@ func (m PipelineModel) scoreStyle(score float64) lipgloss.Style {
 	}
 }
 
-func (m PipelineModel) statusColorMap() map[string]lipgloss.Color {
+func (m *PipelineModel) statusColorMap() map[string]lipgloss.Color {
 	return map[string]lipgloss.Color{
 		"interview": m.theme.Green,
 		"offer":     m.theme.Green,
@@ -818,10 +916,10 @@ func (m PipelineModel) statusColorMap() map[string]lipgloss.Color {
 	}
 }
 
-func (m PipelineModel) countByNormStatus(status string) int {
+func (m *PipelineModel) countByNormStatus(status string) int {
 	count := 0
-	for _, app := range m.filtered {
-		if states.Normalize(app.Status) == status {
+	for i := range m.filtered {
+		if states.Normalize(m.filtered[i].Status) == status {
 			count++
 		}
 	}

@@ -1,0 +1,16 @@
+# lefthook.yml — git hooks for career-ops
+
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      glob: "*.go"
+      run: mise exec -- golangci-lint run --fix
+    test:
+      glob: "*.go"
+      run: mise exec -- go test ./...
+
+pre-push:
+  commands:
+    ci:
+      run: mise exec -- task ci

@@ -65,21 +65,11 @@ linters:
         path: ".*\\.pb\\.go$"
       - linters: [all]
         path: ".*_generated\\.go$"
-      # Exclude legacy dashboard (being migrated)
-      - linters: [all]
-        path: "^dashboard/"
-      # Test files: exclude noisy linters
-      - linters: [lll]
-        source: "^//go:generate "
-      # chromedp context patterns
-      - linters: [govet]
-        text: "lostcancel"
-        path: "pdf|chrome"
-      # Cobra/Viper init patterns
-      - linters: [errcheck]
-        text: "viper\\."
-        path: "cmd/"
-
+      # openURLCmd validates the URL (scheme must be http/https) before passing
+      # to exec.Command; the G204 warning is a false positive.
+      - linters: [gosec]
+        text: "G204"
+        path: "cmd_dashboard\\.go$"
   settings:
     errcheck:
       check-type-assertions: true

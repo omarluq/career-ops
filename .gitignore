@@ -19,6 +19,7 @@ jds/*
 # User config
 config/profile.yml
 portals.yml
+cv.md
 
 # Build artifacts
 bin/

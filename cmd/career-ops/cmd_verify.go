@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/samber/lo"
+	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 
 	"github.com/omarluq/career-ops/internal/model"
@@ -62,14 +64,17 @@ func runVerify(_ *cobra.Command, _ []string) error {
 	// Try to find and parse applications.md
 	appsFile, err := tracker.FindAppsFile(root)
 	if err != nil {
-		fmt.Println("\nNo applications.md found. This is normal for a fresh setup.")
-		fmt.Println("The file will be created when you evaluate your first offer.")
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Println("\nNo applications.md found. This is normal for a fresh setup.")
+			fmt.Println("The file will be created when you evaluate your first offer.")
+			return nil
+		}
+		return oops.Wrapf(err, "finding applications file")
 	}
 
 	apps, err := tracker.ParseApplications(root)
 	if err != nil {
-		return fmt.Errorf("parsing applications: %w", err)
+		return oops.Wrapf(err, "parsing applications")
 	}
 
 	fmt.Printf("\nChecking %d entries in %s\n\n", len(apps), appsFile)
@@ -108,29 +113,31 @@ func runVerify(_ *cobra.Command, _ []string) error {
 
 // checkStatuses validates that all statuses are canonical (or normalizable).
 func checkStatuses(r *verifyResult, apps []model.CareerApplication) {
-	bad := 0
-	for _, app := range apps {
+	bad := lo.CountBy(apps, func(app model.CareerApplication) bool {
 		raw := app.Status
 		normalized := states.Normalize(raw)
 
+		hasErr := false
 		// Check if the normalized result is a known canonical ID
 		if !states.IsCanonical(normalized) {
 			r.errorf("#%d: Non-canonical status %q (normalized to %q)", app.Number, raw, normalized)
-			bad++
+			hasErr = true
 		}
 
 		// Check for markdown bold in status
 		if strings.Contains(raw, "**") {
 			r.errorf("#%d: Status contains markdown bold: %q", app.Number, raw)
-			bad++
+			hasErr = true
 		}
 
 		// Check for dates embedded in status
 		if reDateInStr.MatchString(raw) {
 			r.errorf("#%d: Status contains date: %q -- dates go in date column", app.Number, raw)
-			bad++
+			hasErr = true
 		}
-	}
+
+		return hasErr
+	})
 	if bad == 0 {
 		okMsg("All statuses are canonical")
 	}
@@ -145,15 +152,15 @@ func checkDuplicates(r *verifyResult, apps []model.CareerApplication) {
 	}
 
 	groups := make(map[string]*group)
-	for _, app := range apps {
-		key := tracker.NormalizeCompanyKey(app.Company) + "::" + strings.ToLower(app.Role)
+	for i := range apps {
+		key := tracker.NormalizeCompanyKey(apps[i].Company) + "::" + strings.ToLower(apps[i].Role)
 		if g, ok := groups[key]; ok {
-			g.nums = append(g.nums, app.Number)
+			g.nums = append(g.nums, apps[i].Number)
 		} else {
 			groups[key] = &group{
-				company: app.Company,
-				role:    app.Role,
-				nums:    []int{app.Number},
+				company: apps[i].Company,
+				role:    apps[i].Role,
+				nums:    []int{apps[i].Number},
 			}
 		}
 	}
@@ -176,17 +183,17 @@ func checkDuplicates(r *verifyResult, apps []model.CareerApplication) {
 
 // checkReportLinks validates that all report markdown links point to existing files.
 func checkReportLinks(r *verifyResult, apps []model.CareerApplication, root string) {
-	broken := 0
-	for _, app := range apps {
+	broken := lo.CountBy(apps, func(app model.CareerApplication) bool {
 		if app.ReportPath == "" {
-			continue
+			return false
 		}
 		fullPath := filepath.Join(root, app.ReportPath)
 		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 			r.errorf("#%d: Report not found: %s", app.Number, app.ReportPath)
-			broken++
+			return true
 		}
-	}
+		return false
+	})
 	if broken == 0 {
 		okMsg("All report links valid")
 	}
@@ -194,18 +201,18 @@ func checkReportLinks(r *verifyResult, apps []model.CareerApplication, root stri
 
 // checkScores validates score format (X.X/5, N/A, or DUP).
 func checkScores(r *verifyResult, apps []model.CareerApplication) {
-	bad := 0
-	for _, app := range apps {
+	bad := lo.CountBy(apps, func(app model.CareerApplication) bool {
 		s := strings.ReplaceAll(app.ScoreRaw, "**", "")
 		s = strings.TrimSpace(s)
 		if s == "N/A" || s == "DUP" || s == "" {
-			continue
+			return false
 		}
 		if !reScoreFormat.MatchString(s) {
 			r.errorf("#%d: Invalid score format: %q", app.Number, app.ScoreRaw)
-			bad++
+			return true
 		}
-	}
+		return false
+	})
 	if bad == 0 {
 		okMsg("All scores valid")
 	}
@@ -217,20 +224,17 @@ func checkRowFormat(r *verifyResult, root string) {
 	if err != nil {
 		return
 	}
-	content, err := os.ReadFile(appsFile)
+	content, err := os.ReadFile(filepath.Clean(appsFile))
 	if err != nil {
 		return
 	}
 
-	bad := 0
-	for _, line := range strings.Split(string(content), "\n") {
-		if !strings.HasPrefix(line, "|") {
-			continue
-		}
-		// Skip header and separator rows
-		if strings.Contains(line, "---") || strings.Contains(line, "Company") || strings.Contains(line, "Empresa") {
-			continue
-		}
+	lines := strings.Split(string(content), "\n")
+	dataRows := lo.Filter(lines, func(line string, _ int) bool {
+		return isDataRow(line)
+	})
+
+	bad := lo.CountBy(dataRows, func(line string) bool {
 		parts := strings.Split(line, "|")
 		if len(parts) < 9 {
 			truncated := line
@@ -238,12 +242,27 @@ func checkRowFormat(r *verifyResult, root string) {
 				truncated = truncated[:80] + "..."
 			}
 			r.errorf("Row with <9 columns: %s", truncated)
-			bad++
+			return true
 		}
-	}
+		return false
+	})
 	if bad == 0 {
 		okMsg("All rows properly formatted")
 	}
+}
+
+// isDataRow returns true if the line is a table data row (not header/separator).
+func isDataRow(line string) bool {
+	if !strings.HasPrefix(line, "|") {
+		return false
+	}
+	if strings.Contains(line, "---") {
+		return false
+	}
+	if strings.Contains(line, "Company") || strings.Contains(line, "Empresa") {
+		return false
+	}
+	return true
 }
 
 // checkPendingTSVs warns about unmerged TSV files in tracker-additions/.
@@ -269,13 +288,13 @@ func checkPendingTSVs(r *verifyResult, root string) {
 
 // checkBoldScores warns about markdown bold in score fields.
 func checkBoldScores(r *verifyResult, apps []model.CareerApplication) {
-	bad := 0
-	for _, app := range apps {
+	bad := lo.CountBy(apps, func(app model.CareerApplication) bool {
 		if strings.Contains(app.ScoreRaw, "**") {
 			r.warnf("#%d: Score has markdown bold: %q", app.Number, app.ScoreRaw)
-			bad++
+			return true
 		}
-	}
+		return false
+	})
 	if bad == 0 {
 		okMsg("No bold in scores")
 	}
@@ -283,17 +302,17 @@ func checkBoldScores(r *verifyResult, apps []model.CareerApplication) {
 
 // checkDates validates that all date fields match YYYY-MM-DD format.
 func checkDates(r *verifyResult, apps []model.CareerApplication) {
-	bad := 0
-	for _, app := range apps {
+	bad := lo.CountBy(apps, func(app model.CareerApplication) bool {
 		d := strings.TrimSpace(app.Date)
 		if d == "" {
-			continue
+			return false
 		}
 		if !reDateFormat.MatchString(d) {
 			r.errorf("#%d: Invalid date format: %q (expected YYYY-MM-DD)", app.Number, d)
-			bad++
+			return true
 		}
-	}
+		return false
+	})
 	if bad == 0 {
 		okMsg("All dates valid")
 	}

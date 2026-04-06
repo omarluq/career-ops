@@ -1,12 +1,17 @@
-package states
+package states_test
 
 import (
 	"testing"
+
+	"github.com/omarluq/career-ops/internal/states"
+	"github.com/samber/lo"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNormalize(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		input string
 		want  string
@@ -44,7 +49,7 @@ func TestNormalize(t *testing.T) {
 		{"monitor", "skip"},
 
 		// Extra aliases from JS scripts
-		{"condicional", "evaluated"},
+		{"conditional", "evaluated"},
 		{"hold", "evaluated"},
 		{"evaluar", "evaluated"},
 		{"verificar", "evaluated"},
@@ -64,7 +69,7 @@ func TestNormalize(t *testing.T) {
 		{"Repost #123", "discarded"},
 		{"GEO BLOCKER", "skip"},
 		{"geo blocker", "skip"},
-		{"—", "discarded"},
+		{"\u2014", "discarded"},
 		{"-", "discarded"},
 		{"", "discarded"},
 
@@ -74,47 +79,110 @@ func TestNormalize(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.input, func(t *testing.T) {
-			got := Normalize(tt.input)
-			assert.Equal(t, tt.want, got, "Normalize(%q)", tt.input)
+			t.Parallel()
+			got := states.Normalize(tt.input)
+			assert.Equal(t, tt.want, got,
+				"Normalize(%q)", tt.input)
 		})
 	}
 }
 
 func TestIsCanonical(t *testing.T) {
-	canonicals := []string{"evaluated", "applied", "responded", "interview", "offer", "rejected", "discarded", "skip"}
-	for _, c := range canonicals {
-		assert.True(t, IsCanonical(c), "IsCanonical(%q) should be true", c)
+	t.Parallel()
+
+	canonicals := []string{
+		"evaluated", "applied", "responded",
+		"interview", "offer", "rejected",
+		"discarded", "skip",
 	}
-	nonCanonicals := []string{"evaluada", "aplicado", "unknown", "foo"}
-	for _, nc := range nonCanonicals {
-		assert.False(t, IsCanonical(nc), "IsCanonical(%q) should be false", nc)
+	lo.ForEach(canonicals, func(c string, _ int) {
+		t.Run("canonical/"+c, func(t *testing.T) {
+			t.Parallel()
+			assert.True(t,
+				states.IsCanonical(c),
+				"IsCanonical(%q) should be true", c,
+			)
+		})
+	})
+
+	nonCanonicals := []string{
+		"evaluada", "aplicado", "unknown", "foo",
 	}
+	lo.ForEach(nonCanonicals, func(nc string, _ int) {
+		t.Run("non-canonical/"+nc, func(t *testing.T) {
+			t.Parallel()
+			assert.False(t,
+				states.IsCanonical(nc),
+				"IsCanonical(%q) should be false", nc,
+			)
+		})
+	})
 }
 
 func TestLabel(t *testing.T) {
-	tests := map[string]string{
-		"evaluated": "Evaluated",
-		"applied":   "Applied",
-		"skip":      "SKIP",
-		"interview": "Interview",
-		"unknown":   "unknown",
+	t.Parallel()
+
+	tests := []struct {
+		id   string
+		want string
+	}{
+		{"evaluated", "Evaluated"},
+		{"applied", "Applied"},
+		{"skip", "SKIP"},
+		{"interview", "Interview"},
+		{"unknown", "unknown"},
 	}
-	for id, want := range tests {
-		assert.Equal(t, want, Label(id), "Label(%q)", id)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.id, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want,
+				states.Label(tt.id),
+				"Label(%q)", tt.id)
+		})
 	}
 }
 
 func TestPriority(t *testing.T) {
+	t.Parallel()
+
 	// Interview should be highest priority (lowest number)
-	assert.Less(t, Priority("interview"), Priority("evaluated"), "interview should have higher priority than evaluated")
-	assert.Less(t, Priority("offer"), Priority("applied"), "offer should have higher priority than applied")
-	assert.Greater(t, Priority("discarded"), Priority("evaluated"), "discarded should have lower priority than evaluated")
+	assert.Less(t,
+		states.Priority("interview"),
+		states.Priority("evaluated"),
+		"interview should have higher priority than evaluated",
+	)
+	assert.Less(t,
+		states.Priority("offer"),
+		states.Priority("applied"),
+		"offer should have higher priority than applied",
+	)
+	assert.Greater(t,
+		states.Priority("discarded"),
+		states.Priority("evaluated"),
+		"discarded should have lower priority than evaluated",
+	)
 }
 
 func TestStatusRank(t *testing.T) {
+	t.Parallel()
+
 	// Offer should be highest rank
-	assert.Greater(t, StatusRank("offer"), StatusRank("applied"), "offer should rank higher than applied")
-	assert.Greater(t, StatusRank("applied"), StatusRank("evaluated"), "applied should rank higher than evaluated")
-	assert.Equal(t, StatusRank("skip"), StatusRank("discarded"), "skip and discarded should have same rank")
+	assert.Greater(t,
+		states.StatusRank("offer"),
+		states.StatusRank("applied"),
+		"offer should rank higher than applied",
+	)
+	assert.Greater(t,
+		states.StatusRank("applied"),
+		states.StatusRank("evaluated"),
+		"applied should rank higher than evaluated",
+	)
+	assert.Equal(t,
+		states.StatusRank("skip"),
+		states.StatusRank("discarded"),
+		"skip and discarded should have same rank",
+	)
 }
