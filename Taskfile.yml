@@ -1,0 +1,157 @@
+# Taskfile for career-ops
+# Usage: task [task-name]
+
+version: '3'
+
+vars:
+  BINARY_NAME: career-ops
+  BUILD_DIR: ./bin
+  CMD_PKG: ./cmd/career-ops
+  COVERAGE_FILE: coverage.out
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  # Development
+  dev:
+    desc: Build and launch dashboard
+    deps: [build]
+    cmds:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}} dashboard"
+
+  run:
+    desc: Build and run
+    deps: [build]
+    cmds:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}} {{.CLI_ARGS}}"
+
+  # Build
+  build:
+    desc: Build binary
+    vars:
+      VERSION:
+        sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+      COMMIT:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo "none"
+      BUILD_DATE:
+        sh: date -u +"%Y-%m-%dT%H:%M:%SZ"
+      LDFLAGS: >-
+        -X github.com/omarluq/career-ops/internal/vinfo.Version={{.VERSION}}
+        -X github.com/omarluq/career-ops/internal/vinfo.Commit={{.COMMIT}}
+        -X github.com/omarluq/career-ops/internal/vinfo.BuildDate={{.BUILD_DATE}}
+    env:
+      CGO_ENABLED: "0"
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -ldflags "{{.LDFLAGS}}" -o {{.BUILD_DIR}}/{{.BINARY_NAME}} {{.CMD_PKG}}
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+
+  install:
+    desc: Install binary into $GOPATH/bin
+    cmds:
+      - go install {{.CMD_PKG}}
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+      - rm -f {{.COVERAGE_FILE}}
+      - go clean -cache -testcache
+
+  # Testing
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v -race ./...
+
+  test-short:
+    desc: Run short tests
+    cmds:
+      - go test -v -race -short ./...
+
+  test-coverage:
+    desc: Run tests with coverage
+    cmds:
+      - go test -v -race -coverprofile={{.COVERAGE_FILE}} -covermode=atomic ./...
+      - go tool cover -html={{.COVERAGE_FILE}} -o coverage.html
+
+  # Code quality (golangci-lint handles everything)
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
+  fmt:
+    desc: Format and fix with golangci-lint
+    cmds:
+      - golangci-lint run --fix
+
+  # Dependencies
+  deps:
+    desc: Download dependencies
+    cmds:
+      - go mod download
+
+  tidy:
+    desc: Tidy dependencies
+    cmds:
+      - go mod tidy
+
+  # CI
+  ci:
+    desc: Run CI checks
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
+      - task: build
+
+  # Pipeline Commands
+  verify:
+    desc: Run pipeline health check (statuses, dupes, links)
+    cmds:
+      - go run {{.CMD_PKG}} verify
+
+  normalize:
+    desc: Map status aliases to canonical statuses
+    cmds:
+      - go run {{.CMD_PKG}} normalize
+
+  dedup:
+    desc: Remove duplicate tracker entries
+    cmds:
+      - go run {{.CMD_PKG}} dedup
+
+  merge:
+    desc: Merge batch TSV additions into applications.md
+    cmds:
+      - go run {{.CMD_PKG}} merge
+
+  sync-check:
+    desc: Validate setup consistency
+    cmds:
+      - go run {{.CMD_PKG}} sync-check
+
+  pdf:
+    desc: Generate PDF from HTML (pass args after --)
+    cmds:
+      - go run {{.CMD_PKG}} pdf {{.CLI_ARGS}}
+
+  batch:
+    desc: Run batch processing (pass args after --)
+    cmds:
+      - go run {{.CMD_PKG}} batch {{.CLI_ARGS}}
+
+  # Dashboard
+  dashboard:
+    desc: Launch the TUI dashboard
+    cmds:
+      - go run {{.CMD_PKG}} dashboard

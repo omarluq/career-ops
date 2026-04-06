@@ -1,19 +1,33 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/spf13/cobra"
 
-	"github.com/santifer/career-ops/dashboard/internal/data"
-	"github.com/santifer/career-ops/dashboard/internal/theme"
-	"github.com/santifer/career-ops/dashboard/internal/ui/screens"
+	"github.com/omarluq/career-ops/internal/states"
+	"github.com/omarluq/career-ops/internal/tracker"
+	"github.com/omarluq/career-ops/internal/ui/screens"
+	"github.com/omarluq/career-ops/internal/ui/theme"
 )
 
+var dashboardPath string
+
+var dashboardCmd = &cobra.Command{
+	Use:   "dashboard",
+	Short: "Launch the interactive TUI dashboard",
+	RunE:  runDashboard,
+}
+
+func init() {
+	dashboardCmd.Flags().StringVar(&dashboardPath, "path", ".", "Path to career-ops directory")
+}
+
+// viewState tracks which screen is active.
 type viewState int
 
 const (
@@ -21,6 +35,7 @@ const (
 	viewReport
 )
 
+// appModel is the top-level Bubble Tea model that routes between screens.
 type appModel struct {
 	pipeline      screens.PipelineModel
 	viewer        screens.ViewerModel
@@ -47,30 +62,33 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case screens.PipelineLoadReportMsg:
-		archetype, tldr, remote, comp := data.LoadReportSummary(msg.CareerOpsPath, msg.ReportPath)
+		archetype, tldr, remote, comp := tracker.LoadReportSummary(msg.CareerOpsPath, msg.ReportPath)
 		m.pipeline.EnrichReport(msg.ReportPath, archetype, tldr, remote, comp)
 		return m, nil
 
 	case screens.PipelineUpdateStatusMsg:
-		err := data.UpdateApplicationStatus(msg.CareerOpsPath, msg.App, msg.NewStatus)
+		err := tracker.UpdateStatus(msg.CareerOpsPath, msg.App, msg.NewStatus)
 		if err != nil {
 			return m, nil
 		}
-		apps := data.ParseApplications(m.careerOpsPath)
-		metrics := data.ComputeMetrics(apps)
+		apps, parseErr := tracker.ParseApplications(m.careerOpsPath)
+		if parseErr != nil {
+			return m, nil
+		}
+		metrics := tracker.ComputeMetrics(apps)
+		t := theme.NewTheme("catppuccin-mocha")
 		old := m.pipeline
 		m.pipeline = screens.NewPipelineModel(
-			theme.NewTheme("catppuccin-mocha"),
-			apps, metrics, m.careerOpsPath,
+			t, apps, metrics, m.careerOpsPath,
 			old.Width(), old.Height(),
 		)
 		m.pipeline.CopyReportCache(&old)
 		return m, nil
 
 	case screens.PipelineOpenReportMsg:
+		t := theme.NewTheme("catppuccin-mocha")
 		m.viewer = screens.NewViewerModel(
-			theme.NewTheme("catppuccin-mocha"),
-			msg.Path, msg.Title,
+			t, msg.Path, msg.Title,
 			m.pipeline.Width(), m.pipeline.Height(),
 		)
 		m.state = viewReport
@@ -115,31 +133,34 @@ func (m appModel) View() string {
 	return m.pipeline.View()
 }
 
-func main() {
-	pathFlag := flag.String("path", ".", "Path to career-ops directory")
-	flag.Parse()
+func runDashboard(_ *cobra.Command, _ []string) error {
+	careerOpsPath := dashboardPath
 
-	careerOpsPath := *pathFlag
+	// Initialize states from YAML config.
+	states.Init(careerOpsPath)
 
-	// Load applications
-	apps := data.ParseApplications(careerOpsPath)
-	if apps == nil {
-		fmt.Fprintf(os.Stderr, "Error: could not find applications.md in %s or %s/data/\n", careerOpsPath, careerOpsPath)
-		os.Exit(1)
+	// Load applications.
+	apps, err := tracker.ParseApplications(careerOpsPath)
+	if err != nil {
+		return fmt.Errorf("could not load applications: %w", err)
+	}
+	if len(apps) == 0 {
+		fmt.Fprintln(os.Stderr, "Warning: no applications found; the dashboard will be empty.")
 	}
 
-	// Compute metrics
-	metrics := data.ComputeMetrics(apps)
+	// Compute metrics.
+	metrics := tracker.ComputeMetrics(apps)
 
-	// Batch-load all report summaries
+	// Build the pipeline screen with an initial size estimate.
 	t := theme.NewTheme("catppuccin-mocha")
 	pm := screens.NewPipelineModel(t, apps, metrics, careerOpsPath, 120, 40)
 
+	// Batch-load all report summaries so the preview is ready immediately.
 	for _, app := range apps {
 		if app.ReportPath == "" {
 			continue
 		}
-		archetype, tldr, remote, comp := data.LoadReportSummary(careerOpsPath, app.ReportPath)
+		archetype, tldr, remote, comp := tracker.LoadReportSummary(careerOpsPath, app.ReportPath)
 		if archetype != "" || tldr != "" || remote != "" || comp != "" {
 			pm.EnrichReport(app.ReportPath, archetype, tldr, remote, comp)
 		}
@@ -152,7 +173,7 @@ func main() {
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("TUI error: %w", err)
 	}
+	return nil
 }

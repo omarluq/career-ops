@@ -1,4 +1,38 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # Career-Ops -- AI Job Search Pipeline
+
+## Development Commands
+
+```bash
+# Build
+task build              # Build binary with version injection
+task install            # Install to $GOPATH/bin
+
+# Pipeline integrity
+career-ops verify       # Health check (statuses, dupes, links)
+career-ops merge        # Merge batch TSV additions into applications.md
+career-ops dedup        # Remove duplicate entries
+career-ops normalize    # Map aliases to canonical statuses
+career-ops sync-check   # Validate setup consistency
+
+# PDF generation (requires Chrome/Chromium installed)
+career-ops pdf <input.html> <output.pdf> [--format=letter|a4]
+
+# Batch processing
+career-ops batch        # (not yet implemented)
+
+# Dashboard TUI
+career-ops dashboard [--path .]
+
+# Development
+task test               # Run tests
+task lint               # golangci-lint
+task fmt                # Auto-fix lint issues
+task ci                 # lint + test
+```
 
 ## Origin
 
@@ -21,7 +55,6 @@ AI-powered job search automation built on Claude Code: pipeline tracking, offer 
 | `data/scan-history.tsv` | Scanner dedup history |
 | `portals.yml` | Query and company config |
 | `templates/cv-template.html` | HTML template for CVs |
-| `generate-pdf.mjs` | Puppeteer: HTML to PDF |
 | `article-digest.md` | Compact proof points from portfolio (optional) |
 | `interview-prep/story-bank.md` | Accumulated STAR+R stories across evaluations |
 | `reports/` | Evaluation reports (format: `{###}-{company-slug}-{YYYY-MM-DD}.md`) |
@@ -141,22 +174,22 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 
 ## Offer Verification -- MANDATORY
 
-**NEVER trust WebSearch/WebFetch to verify if an offer is still active.** ALWAYS use Playwright:
-1. `browser_navigate` to the URL
-2. `browser_snapshot` to read content
+**NEVER trust WebSearch/WebFetch to verify if an offer is still active.** ALWAYS use chromedp:
+1. `chromedp.Navigate` to the URL
+2. `chromedp.OuterHTML` to read content
 3. Only footer/navbar without JD = closed. Title + description + Apply = active.
 
 ---
 
 ## Stack and Conventions
 
-- Node.js (mjs modules), Playwright (PDF + scraping), YAML (config), HTML/CSS (template), Markdown (data)
-- Scripts in `.mjs`, configuration in YAML
+- Go (cobra CLI, chromedp for PDF, bubbletea for TUI), YAML (config), HTML/CSS (template), Markdown (data)
+- CLI source in `cmd/career-ops/`, library code in `internal/`
 - Output in `output/` (gitignored), Reports in `reports/`
 - JDs in `jds/` (referenced as `local:jds/{file}` in pipeline.md)
 - Batch in `batch/` (gitignored except scripts and prompt)
 - Report numbering: sequential 3-digit zero-padded, max existing + 1
-- **RULE: After each batch of evaluations, run `node merge-tracker.mjs`** to merge tracker additions and avoid duplications.
+- **RULE: After each batch of evaluations, run `career-ops merge`** to merge tracker additions and avoid duplications.
 - **RULE: NEVER create new entries in applications.md if company+role already exists.** Update the existing entry.
 
 ### TSV Format for Tracker Additions
@@ -182,13 +215,13 @@ Write one TSV file per evaluation to `batch/tracker-additions/{num}-{company-slu
 
 ### Pipeline Integrity
 
-1. **NEVER edit applications.md to ADD new entries** -- Write TSV in `batch/tracker-additions/` and `merge-tracker.mjs` handles the merge.
+1. **NEVER edit applications.md to ADD new entries** -- Write TSV in `batch/tracker-additions/` and `career-ops merge` handles the merge.
 2. **YES you can edit applications.md to UPDATE status/notes of existing entries.**
 3. All reports MUST include `**URL:**` in the header (between Score and PDF).
 4. All statuses MUST be canonical (see `templates/states.yml`).
-5. Health check: `node verify-pipeline.mjs`
-6. Normalize statuses: `node normalize-statuses.mjs`
-7. Dedup: `node dedup-tracker.mjs`
+5. Health check: `career-ops verify`
+6. Normalize statuses: `career-ops normalize`
+7. Dedup: `career-ops dedup`
 
 ### Canonical States (applications.md)
 

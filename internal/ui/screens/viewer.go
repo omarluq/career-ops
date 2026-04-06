@@ -1,13 +1,14 @@
 package screens
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/santifer/career-ops/dashboard/internal/theme"
+	"github.com/omarluq/career-ops/internal/ui/theme"
 )
 
 // ViewerClosedMsg is emitted when the viewer is dismissed.
@@ -39,15 +40,18 @@ func NewViewerModel(t theme.Theme, path, title string, width, height int) Viewer
 	}
 }
 
+// Init implements tea.Model.
 func (m ViewerModel) Init() tea.Cmd {
 	return nil
 }
 
+// Resize updates dimensions.
 func (m *ViewerModel) Resize(width, height int) {
 	m.width = width
 	m.height = height
 }
 
+// Update handles input for the viewer screen.
 func (m ViewerModel) Update(msg tea.Msg) (ViewerModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -107,13 +111,14 @@ func (m ViewerModel) Update(msg tea.Msg) (ViewerModel, tea.Cmd) {
 }
 
 func (m ViewerModel) bodyHeight() int {
-	h := m.height - 4 // header + footer + padding
+	h := m.height - 4
 	if h < 3 {
 		h = 3
 	}
 	return h
 }
 
+// View renders the viewer screen.
 func (m ViewerModel) View() string {
 	header := m.renderHeader()
 	body := m.renderBody()
@@ -133,43 +138,13 @@ func (m ViewerModel) renderHeader() string {
 	title := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Blue).Render(m.title)
 
 	right := lipgloss.NewStyle().Foreground(m.theme.Subtext)
-	pos := right.Render(strings.TrimRight(
-		strings.Repeat(" ", max(0, m.width-lipgloss.Width(m.title)-30)),
-		" ",
-	))
-
-	lineInfo := right.Render(
-		strings.Join([]string{
-			"L",
-			strings.TrimSpace(lipgloss.NewStyle().Render(
-				strings.Join([]string{
-					func() string {
-						s := m.scrollOffset + 1
-						if s > len(m.lines) {
-							s = len(m.lines)
-						}
-						return string(rune('0'+s/100%10)) + string(rune('0'+s/10%10)) + string(rune('0'+s%10))
-					}(),
-				}, ""),
-			)),
-			"/",
-			func() string {
-				t := len(m.lines)
-				return string(rune('0'+t/100%10)) + string(rune('0'+t/10%10)) + string(rune('0'+t%10))
-			}(),
-		}, ""),
-	)
-	_ = pos
-	_ = lineInfo
-
 	scroll := right.Render(func() string {
 		if len(m.lines) == 0 {
 			return ""
 		}
-		pct := 0
 		maxScroll := len(m.lines) - m.bodyHeight()
-		if maxScroll > 0 {
-			pct = m.scrollOffset * 100 / maxScroll
+		if maxScroll <= 0 {
+			return "All"
 		}
 		if m.scrollOffset == 0 {
 			return "Top"
@@ -177,10 +152,8 @@ func (m ViewerModel) renderHeader() string {
 		if m.scrollOffset >= maxScroll {
 			return "End"
 		}
-		return func() string {
-			s := pct
-			return string(rune('0'+s/10%10)) + string(rune('0'+s%10)) + "%"
-		}()
+		pct := m.scrollOffset * 100 / maxScroll
+		return fmt.Sprintf("%d%%", pct)
 	}())
 
 	gap := m.width - lipgloss.Width(m.title) - lipgloss.Width(scroll) - 4
@@ -206,13 +179,11 @@ func (m ViewerModel) renderBody() string {
 	}
 	visible := m.lines[m.scrollOffset:end]
 
-	// Style markdown elements
 	var styled []string
 	for _, line := range visible {
 		styled = append(styled, m.styleLine(line))
 	}
 
-	// Pad to fill height
 	for len(styled) < bh {
 		styled = append(styled, "")
 	}
@@ -223,59 +194,50 @@ func (m ViewerModel) renderBody() string {
 func (m ViewerModel) styleLine(line string) string {
 	trimmed := strings.TrimSpace(line)
 
-	// H1
 	if strings.HasPrefix(trimmed, "# ") {
 		return lipgloss.NewStyle().
 			Bold(true).
 			Foreground(m.theme.Blue).
 			Render(line)
 	}
-	// H2
 	if strings.HasPrefix(trimmed, "## ") {
 		return lipgloss.NewStyle().
 			Bold(true).
 			Foreground(m.theme.Mauve).
 			Render(line)
 	}
-	// H3
 	if strings.HasPrefix(trimmed, "### ") {
 		return lipgloss.NewStyle().
 			Bold(true).
 			Foreground(m.theme.Sky).
 			Render(line)
 	}
-	// Horizontal rule
 	if trimmed == "---" || trimmed == "***" {
 		return lipgloss.NewStyle().
 			Foreground(m.theme.Overlay).
-			Render(strings.Repeat("─", m.width-4))
+			Render(strings.Repeat("\u2500", m.width-4))
 	}
-	// Bold fields like **Score:** 4.0/5
 	if strings.HasPrefix(trimmed, "**") && strings.Contains(trimmed, ":**") {
 		return lipgloss.NewStyle().
 			Foreground(m.theme.Yellow).
 			Render(line)
 	}
-	// Table headers/separators
 	if strings.HasPrefix(trimmed, "|") && strings.Contains(trimmed, "---") {
 		return lipgloss.NewStyle().
 			Foreground(m.theme.Overlay).
 			Render(line)
 	}
-	// Table rows
 	if strings.HasPrefix(trimmed, "|") {
 		return lipgloss.NewStyle().
 			Foreground(m.theme.Text).
 			Render(line)
 	}
-	// Bullet points
 	if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
 		return lipgloss.NewStyle().
 			Foreground(m.theme.Text).
 			Render(line)
 	}
 
-	// Default
 	return lipgloss.NewStyle().
 		Foreground(m.theme.Subtext).
 		Render(line)
@@ -292,7 +254,7 @@ func (m ViewerModel) renderFooter() string {
 	descStyle := lipgloss.NewStyle().Foreground(m.theme.Subtext)
 
 	return style.Render(
-		keyStyle.Render("↑↓") + descStyle.Render(" scroll  ") +
+		keyStyle.Render("\u2191\u2193") + descStyle.Render(" scroll  ") +
 			keyStyle.Render("PgUp/Dn") + descStyle.Render(" page  ") +
 			keyStyle.Render("g/G") + descStyle.Render(" top/end  ") +
 			keyStyle.Render("Esc") + descStyle.Render(" back"))

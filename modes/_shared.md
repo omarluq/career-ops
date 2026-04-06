@@ -30,19 +30,11 @@ The skill applies with EQUAL rigor to ALL target roles. None is primary or secon
 
 | Archetype | Thematic axes | What they buy |
 |-----------|---------------|---------------|
-| **AI Platform / LLMOps Engineer** | Evaluation, observability, reliability, pipelines | Someone who puts AI in production with metrics |
-| **Agentic Workflows / Automation** | HITL, tooling, orchestration, multi-agent | Someone who builds reliable agent systems |
-| **Technical AI Product Manager** | GenAI/Agents, PRDs, discovery, delivery | Someone who translates business to AI product |
-| **AI Solutions Architect** | Hyperautomation, enterprise, integrations | Someone who designs end-to-end AI architectures |
-| **AI Forward Deployed Engineer** | Client-facing, fast delivery, prototyping | Someone who delivers AI solutions to clients fast |
-| **AI Transformation Lead** | Change management, adoption, org enablement | Someone who leads AI transformation in an org |
-
-<!-- [CUSTOMIZE] Edit the archetypes above to match YOUR target roles.
-     For example, if you're a backend engineer, replace with:
-     - Senior Backend Engineer
-     - Staff Platform Engineer
-     - Engineering Manager
-     etc. -->
+| **Platform / DevOps Engineer** | Kubernetes, GitOps, IaC, CI/CD, cloud cost optimization, observability | Someone who builds and scales production infrastructure with measurable impact |
+| **AI / ML Infrastructure Engineer** | MLOps, LLMOps, agentic systems, RAG pipelines, MCP servers, AI observability | Someone who builds the platform layer that makes AI work in production |
+| **Fullstack Engineer** | Ruby on Rails, Go, React, Hotwire, GraphQL, edge computing, performance | Someone who ships end-to-end features with strong infra instincts |
+| **Solutions Architect** | System design, integrations, enterprise-ready, cross-functional | Someone who designs scalable architectures and bridges teams |
+| **SRE / Cloud Engineer** | Reliability, monitoring, incident response, automation, cost optimization | Someone who keeps systems running and makes them cheaper |
 
 ### Adaptive Framing by Archetype
 
@@ -50,22 +42,16 @@ The skill applies with EQUAL rigor to ALL target roles. None is primary or secon
 
 | If the role is... | Emphasize about the candidate... | Proof point sources |
 |-------------------|----------------------------------|---------------------|
-| Platform / LLMOps | Production systems builder, observability, evals, closed-loop | article-digest.md + cv.md |
-| Agentic / Automation | Multi-agent orchestration, HITL, reliability, cost | article-digest.md + cv.md |
-| Technical AI PM | Product discovery, PRDs, metrics, stakeholder mgmt | cv.md + article-digest.md |
-| Solutions Architect | System design, integrations, enterprise-ready | article-digest.md + cv.md |
-| Forward Deployed Engineer | Fast delivery, client-facing, prototype to prod | cv.md + article-digest.md |
-| AI Transformation Lead | Change management, team enablement, adoption | cv.md + article-digest.md |
-
-<!-- [CUSTOMIZE] Map YOUR specific projects/articles to each archetype above -->
+| Platform / DevOps | ECS→EKS migrations, ArgoCD/GitOps, 45% cost reduction, 2B request eliminations via Cloudflare Workers | config/profile.yml |
+| AI / ML Infrastructure | Kagent (K8s-native AI agents), AI-enhanced GitOps with Kubechecks, CC-Relay (multi-provider LLM gateway), MCP servers | config/profile.yml |
+| Fullstack Engineer | G2 Buyer Intent Data product, Ruby on Rails + Go + React + Hotwire, GraphQL APIs | config/profile.yml |
+| Solutions Architect | Crossplane IaC (70% faster provisioning), enterprise AI adoption at scale | config/profile.yml |
+| SRE / Cloud Engineer | ARM/Spot optimization, observability, incident response, cost optimization | config/profile.yml |
 
 ### Exit Narrative (use in ALL framings)
 
-<!-- [CUSTOMIZE] Replace with YOUR narrative. Examples:
-     - "Built and sold my SaaS after 5 years. Now focused on applied AI at scale."
-     - "Led engineering at a Series B startup through 10x growth. Now seeking my next challenge."
-     - "Transitioned from consulting to building product. Looking for high-ownership roles."
-     Read from config/profile.yml → narrative.exit_story -->
+Read from `config/profile.yml` → `narrative.exit_story`:
+"Deep infrastructure engineer who has driven enterprise AI adoption from the platform layer up. Track record of measurable impact: 45% cloud cost reductions, 60% faster deployments, 2B monthly request eliminations. Active open source contributor across Go, Crystal, and JS ecosystems."
 
 Use the candidate's exit story from `config/profile.yml` to frame ALL content:
 - **In PDF Summaries:** Bridge from past to future -- "Now applying the same [skill] to [JD domain]."
@@ -75,11 +61,12 @@ Use the candidate's exit story from `config/profile.yml` to frame ALL content:
 
 ### Cross-cutting Advantage
 
-Frame profile as **"Technical builder with real-world proof"** that adapts framing to the role:
-- For PM: "builder who reduces uncertainty with prototypes then productionizes with discipline"
-- For FDE: "builder who delivers fast with observability and metrics from day 1"
-- For SA: "builder who designs end-to-end systems with real integration experience"
-- For LLMOps: "builder who puts AI in production with closed-loop quality systems"
+Frame profile as **"Infrastructure engineer who bridges DevOps and AI"** that adapts framing to the role:
+- For Platform/DevOps: "engineer who migrates, optimizes, and scales K8s infrastructure with measurable cost/speed impact"
+- For AI/ML Infra: "engineer who builds the platform layer that makes AI work — from Kagent agents to MCP servers to RAG pipelines"
+- For Fullstack: "engineer with deep infra instincts who ships end-to-end — Rails, Go, React, GraphQL, edge workers"
+- For SA: "engineer who designs scalable architectures with real Crossplane/IaC/GitOps implementation experience"
+- For SRE: "engineer who optimizes cost (45% reduction), speed (60% faster deploys), and reliability at enterprise scale"
 
 Convert "builder" into a professional signal, not a "hobby maker". Real proof points make this credible.
 
@@ -110,7 +97,7 @@ If the candidate has a live demo/dashboard (check profile.yml), offer access in 
 <!-- [CUSTOMIZE] Adapt these to your situation -->
 
 **Salary expectations (general framework):**
-> "Based on market data for this role, I'm targeting [RANGE from profile.yml]. I'm flexible on structure -- what matters is the total package and the opportunity."
+> "Based on market data for Senior/Staff Platform and DevOps roles, I'm targeting $180K-$220K base. I'm flexible on structure — what matters is the total package and the opportunity."
 
 **Geographic discount pushback:**
 > "The roles I'm competitive for are output-based, not location-based. My track record doesn't change based on postal code."

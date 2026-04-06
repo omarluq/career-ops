@@ -1,34 +1,30 @@
 # Career-Ops
 
-**[:gb: English](#what-is-this)** | **[:es: Español](#es-versión-en-español)**
+> A Go port of [santifer/career-ops](https://github.com/santifer/career-ops) -- the AI-powered job search pipeline built on Claude Code. Full credit to [Santiago](https://santifer.io) for the original system, modes, scoring logic, and pipeline design. This fork replaces Node.js with a single Go binary.
 
-> AI-powered job search pipeline built on Claude Code. Evaluate offers, generate tailored CVs, scan portals, and track everything -- powered by AI agents.
-
-![Claude Code](https://img.shields.io/badge/Claude_Code-000?style=flat&logo=anthropic&logoColor=white)
-![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat&logo=node.js&logoColor=white)
 ![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)
-![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat&logo=playwright&logoColor=white)
+![Claude Code](https://img.shields.io/badge/Claude_Code-000?style=flat&logo=anthropic&logoColor=white)
+![Bubble Tea](https://img.shields.io/badge/Bubble_Tea-FF75B5?style=flat&logo=go&logoColor=white)
+![chromedp](https://img.shields.io/badge/chromedp-4285F4?style=flat&logo=googlechrome&logoColor=white)
+![golangci--lint](https://img.shields.io/badge/golangci--lint-00ACD7?style=flat&logo=go&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
 ---
 
-<p align="center">
-  <img src="docs/demo.gif" alt="Career-Ops Demo" width="800">
-</p>
+## What Changed in This Fork
 
-## What Is This
+The original career-ops runs on Node.js with 6 separate `.mjs` scripts and Playwright for PDF generation. This fork consolidates everything into a single statically-compiled Go binary:
 
-Career-Ops turns Claude Code into a full job search command center. Instead of manually tracking applications in a spreadsheet, you get an AI-powered pipeline that:
+| Original (Node.js) | This Fork (Go) |
+|---------------------|----------------|
+| 6 `.mjs` scripts | Single `career-ops` binary |
+| Playwright (headless browser) | chromedp (Chrome DevTools Protocol) |
+| `npm install` + `npx playwright install` | `go install` or `task build` |
+| Separate `dashboard/` directory | `career-ops dashboard` subcommand |
+| npm scripts / package.json | go-task (Taskfile.yml) |
+| Node.js runtime required | Zero runtime dependencies |
 
-- **Evaluates offers** with a structured A-F scoring system (10 weighted dimensions)
-- **Generates tailored PDFs** -- ATS-optimized CVs customized per job description
-- **Scans portals** automatically (Greenhouse, Ashby, Lever, company pages)
-- **Processes in batch** -- evaluate 10+ offers in parallel with sub-agents
-- **Tracks everything** in a single source of truth with integrity checks
-
-> **Important: This is NOT a spray-and-pray tool.** The whole point is to apply only where there's a real match -- for your sake and for the recruiter reading your application. The scoring system helps you focus on high-fit opportunities instead of wasting everyone's time. Always review before submitting.
-
-Built by someone who used it to evaluate 740+ job offers, generate 100+ tailored CVs, and land a Head of Applied AI role. [Read the full case study](https://santifer.io/career-ops-system).
+Everything else -- modes, templates, scoring, portals, batch processing -- remains identical to upstream.
 
 ## Features
 
@@ -36,63 +32,99 @@ Built by someone who used it to evaluate 740+ job offers, generate 100+ tailored
 |---------|-------------|
 | **Auto-Pipeline** | Paste a URL, get a full evaluation + PDF + tracker entry |
 | **6-Block Evaluation** | Role summary, CV match, level strategy, comp research, personalization, interview prep (STAR+R) |
-| **Interview Story Bank** | Accumulates STAR+Reflection stories across evaluations -- 5-10 master stories that answer any behavioral question |
+| **Interview Story Bank** | Accumulates STAR+Reflection stories across evaluations |
 | **Negotiation Scripts** | Salary negotiation frameworks, geographic discount pushback, competing offer leverage |
-| **ATS PDF Generation** | Keyword-injected CVs with Space Grotesk + DM Sans design |
-| **Portal Scanner** | 45+ companies pre-configured (Anthropic, OpenAI, ElevenLabs, Retool, n8n...) + custom queries across Ashby, Greenhouse, Lever, Wellfound |
+| **ATS PDF Generation** | Keyword-injected CVs via chromedp with Space Grotesk + DM Sans design |
+| **Portal Scanner** | 45+ companies pre-configured across Ashby, Greenhouse, Lever, Wellfound |
 | **Batch Processing** | Parallel evaluation with `claude -p` workers |
-| **Dashboard TUI** | Terminal UI to browse, filter, and sort your pipeline |
+| **Dashboard TUI** | Bubble Tea terminal UI to browse, filter, and sort your pipeline |
 | **Pipeline Integrity** | Automated merge, dedup, status normalization, health checks |
 
 ## Quick Start
 
-```bash
-# 1. Clone and install
-git clone https://github.com/santifer/career-ops.git
-cd career-ops && npm install
-npx playwright install chromium   # Required for PDF generation
+### Prerequisites
 
-# 2. Configure
+- Go 1.24+ (or use [mise](https://mise.jdx.dev/) to manage versions)
+- Google Chrome or Chromium (for PDF generation via chromedp)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
+
+### Install
+
+```bash
+# Option 1: go install
+go install github.com/omarluq/career-ops/cmd/career-ops@latest
+
+# Option 2: Clone and build
+git clone https://github.com/omarluq/career-ops.git
+cd career-ops
+task build          # Binary lands in ./bin/career-ops
+
+# Option 3: With mise (installs Go, task, linter, etc.)
+git clone https://github.com/omarluq/career-ops.git
+cd career-ops
+mise install        # Installs all tool versions
+task build
+```
+
+### Configure
+
+```bash
 cp config/profile.example.yml config/profile.yml  # Edit with your details
 cp templates/portals.example.yml portals.yml       # Customize companies
-
-# 3. Add your CV
-# Create cv.md in the project root with your CV in markdown
-
-# 4. Personalize with Claude
-claude   # Open Claude Code in this directory
-
-# Then ask Claude to adapt the system to you:
-# "Change the archetypes to backend engineering roles"
-# "Translate the modes to English"
-# "Add these 5 companies to portals.yml"
-# "Update my profile with this CV I'm pasting"
-
-# 5. Start using
-# Paste a job URL or run /career-ops
 ```
 
-> **The system is designed to be customized by Claude itself.** Modes, archetypes, scoring weights, negotiation scripts -- just ask Claude to change them. It reads the same files it uses, so it knows exactly what to edit.
+Create `cv.md` in the project root with your CV in markdown, then open Claude Code:
 
-See [docs/SETUP.md](docs/SETUP.md) for the full setup guide.
+```bash
+claude   # Claude auto-detects career-ops and enters onboarding if needed
+```
 
-## Usage
+> **The system is designed to be customized by Claude itself.** Modes, archetypes, scoring weights, negotiation scripts -- just ask Claude to change them.
 
-Career-ops is a single slash command with multiple modes:
+## CLI Commands
+
+All pipeline tools are subcommands of the single binary:
+
+```bash
+career-ops verify       # Pipeline health check (statuses, dupes, links)
+career-ops merge        # Merge batch TSV additions into applications.md
+career-ops dedup        # Remove duplicate tracker entries
+career-ops normalize    # Map status aliases to canonical statuses
+career-ops sync-check   # Validate setup consistency
+career-ops pdf <in> <out> [--format=letter|a4]  # Generate PDF from HTML
+career-ops batch        # Run batch processing
+career-ops dashboard    # Launch the TUI pipeline viewer
+```
+
+Or use go-task for development shortcuts:
+
+```bash
+task build       # Build binary to ./bin/
+task install     # Install to $GOPATH/bin
+task test        # Run tests with race detector
+task lint        # Run golangci-lint
+task fmt         # Format and auto-fix
+task ci          # Full CI pipeline (fmt + lint + test + build)
+task dashboard   # Build and launch TUI
+```
+
+## Usage with Claude Code
+
+Career-ops is driven by Claude Code with skill modes:
 
 ```
-/career-ops                → Show all available commands
-/career-ops {paste a JD}   → Full auto-pipeline (evaluate + PDF + tracker)
-/career-ops scan           → Scan portals for new offers
-/career-ops pdf            → Generate ATS-optimized CV
-/career-ops batch          → Batch evaluate multiple offers
-/career-ops tracker        → View application status
-/career-ops apply          → Fill application forms with AI
-/career-ops pipeline       → Process pending URLs
-/career-ops contacto       → LinkedIn outreach message
-/career-ops deep           → Deep company research
-/career-ops training       → Evaluate a course/cert
-/career-ops project        → Evaluate a portfolio project
+/career-ops                  Show all available commands
+/career-ops {paste a JD}     Full auto-pipeline (evaluate + PDF + tracker)
+/career-ops scan             Scan portals for new offers
+/career-ops pdf              Generate ATS-optimized CV
+/career-ops batch            Batch evaluate multiple offers
+/career-ops tracker          View application status
+/career-ops apply            Fill application forms with AI
+/career-ops pipeline         Process pending URLs
+/career-ops contacto         LinkedIn outreach message
+/career-ops deep             Deep company research
+/career-ops training         Evaluate a course/cert
+/career-ops project          Evaluate a portfolio project
 ```
 
 Or just paste a job URL or description directly -- career-ops auto-detects it and runs the full pipeline.
@@ -101,20 +133,20 @@ Or just paste a job URL or description directly -- career-ops auto-detects it an
 
 ```
 You paste a job URL or description
-        │
-        ▼
-┌──────────────────┐
-│  Archetype       │  Classifies: LLMOps / Agentic / PM / SA / FDE / Transformation
-│  Detection       │
-└────────┬─────────┘
-         │
-┌────────▼─────────┐
-│  A-F Evaluation   │  Match, gaps, comp research, STAR stories
-│  (reads cv.md)    │
-└────────┬─────────┘
-         │
-    ┌────┼────┐
-    ▼    ▼    ▼
+        |
+        v
++------------------+
+|  Archetype       |  Classifies role type against your target archetypes
+|  Detection       |
++--------+---------+
+         |
++--------v---------+
+|  A-F Evaluation   |  Match, gaps, comp research, STAR stories
+|  (reads cv.md)    |
++--------+---------+
+         |
+    +----+----+
+    v    v    v
  Report  PDF  Tracker
   .md   .pdf   .tsv
 ```
@@ -134,173 +166,85 @@ The scanner comes with **45+ companies** ready to scan and **19 search queries**
 
 **Job boards searched:** Ashby, Greenhouse, Lever, Wellfound, Workable, RemoteFront
 
-## Dashboard TUI
-
-The built-in terminal dashboard lets you browse your pipeline visually:
-
-```bash
-cd dashboard
-go build -o career-dashboard .
-./career-dashboard
-```
-
-Features: 6 filter tabs, 4 sort modes, grouped/flat view, lazy-loaded previews, inline status changes.
-
 ## Project Structure
 
 ```
 career-ops/
-├── CLAUDE.md                    # Agent instructions
-├── cv.md                        # Your CV (create this)
-├── article-digest.md            # Your proof points (optional)
-├── config/
-│   └── profile.example.yml      # Template for your profile
-├── modes/                       # 14 skill modes
-│   ├── _shared.md               # Shared context (customize this)
-│   ├── oferta.md                # Single evaluation
-│   ├── pdf.md                   # PDF generation
-│   ├── scan.md                  # Portal scanner
-│   ├── batch.md                 # Batch processing
+├── cmd/career-ops/             # CLI entrypoint and subcommands
+│   ├── main.go
+│   ├── root.go                 # Cobra root command
+│   ├── cmd_verify.go
+│   ├── cmd_merge.go
+│   ├── cmd_dedup.go
+│   ├── cmd_normalize.go
+│   ├── cmd_sync_check.go
+│   ├── cmd_pdf.go
+│   ├── cmd_batch.go
+│   └── cmd_dashboard.go
+├── internal/                   # Library packages
+│   ├── model/                  # Data models
+│   ├── states/                 # Canonical status management
+│   ├── tracker/                # Markdown table parsing, TSV, fuzzy matching
+│   ├── ui/                     # Bubble Tea dashboard
+│   │   ├── screens/            # Pipeline and viewer screens
+│   │   └── theme/              # Catppuccin Mocha theme + Lipgloss
+│   └── vinfo/                  # Version info (injected at build)
+├── modes/                      # 14 Claude skill modes
+│   ├── _shared.md
+│   ├── oferta.md
+│   ├── pdf.md
+│   ├── scan.md
+│   ├── batch.md
 │   └── ...
 ├── templates/
-│   ├── cv-template.html         # ATS-optimized CV template
-│   ├── portals.example.yml      # Scanner config template
-│   └── states.yml               # Canonical statuses
+│   ├── cv-template.html        # ATS-optimized CV template
+│   ├── portals.example.yml     # Scanner config template
+│   └── states.yml              # Canonical statuses
+├── config/
+│   └── profile.example.yml     # Profile template
 ├── batch/
-│   ├── batch-prompt.md          # Self-contained worker prompt
-│   └── batch-runner.sh          # Orchestrator script
-├── dashboard/                   # Go TUI pipeline viewer
-├── data/                        # Your tracking data (gitignored)
-├── reports/                     # Evaluation reports (gitignored)
-├── output/                      # Generated PDFs (gitignored)
-├── fonts/                       # Space Grotesk + DM Sans
-├── docs/                        # Setup, customization, architecture
-└── examples/                    # Sample CV, report, proof points
+│   ├── batch-prompt.md         # Self-contained worker prompt
+│   └── batch-runner.sh         # Orchestrator script
+├── fonts/                      # Space Grotesk + DM Sans
+├── data/                       # Tracking data (gitignored)
+├── reports/                    # Evaluation reports (gitignored)
+├── output/                     # Generated PDFs (gitignored)
+├── Taskfile.yml                # go-task build automation
+├── .mise.toml                  # Tool version management
+├── .golangci.yml               # Linter configuration
+├── go.mod
+├── go.sum
+└── CLAUDE.md                   # Agent instructions
 ```
 
 ## Tech Stack
 
-![Claude Code](https://img.shields.io/badge/Claude_Code-000?style=flat&logo=anthropic&logoColor=white)
-![Node.js](https://img.shields.io/badge/Node.js-339933?style=flat&logo=node.js&logoColor=white)
-![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat&logo=playwright&logoColor=white)
-![Go](https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white)
-![Bubble Tea](https://img.shields.io/badge/Bubble_Tea-FF75B5?style=flat&logo=go&logoColor=white)
+| Component | Technology |
+|-----------|------------|
+| **Language** | Go 1.24 |
+| **CLI Framework** | Cobra |
+| **Configuration** | Viper + YAML |
+| **PDF Generation** | chromedp (Chrome DevTools Protocol) |
+| **Dashboard TUI** | Bubble Tea + Lipgloss (Catppuccin Mocha) |
+| **Build Automation** | go-task |
+| **Tool Management** | mise |
+| **Linting** | golangci-lint v2 |
+| **Agent** | Claude Code with custom skill modes |
+| **Data** | Markdown tables + YAML config + TSV batch files |
 
-- **Agent**: Claude Code with custom skills and modes
-- **PDF**: Playwright/Puppeteer + HTML template
-- **Scanner**: Playwright + Greenhouse API + WebSearch
-- **Dashboard**: Go + Bubble Tea + Lipgloss (Catppuccin Mocha theme)
-- **Data**: Markdown tables + YAML config + TSV batch files
+## Ethical Use
 
-## Also Open Source
+**This system is designed for quality, not quantity.** The goal is to help you find and apply to roles where there is a genuine match -- not to spam companies with mass applications.
 
-- **[cv-santiago](https://github.com/santifer/cv-santiago)** -- The portfolio website (santifer.io) with AI chatbot, LLMOps dashboard, and case studies. If you need a portfolio to showcase alongside your job search, fork it and make it yours.
+- Never submit an application without reviewing it first
+- If a score is below 3.0/5, the system explicitly recommends skipping
+- A well-targeted application to 5 companies beats a generic blast to 50
+- Every application a human reads costs someone's attention -- only send what is worth reading
 
-## About the Author
+## Upstream
 
-I'm Santiago -- Head of Applied AI, former founder (built and sold a business that still runs with my name on it). I built career-ops to manage my own job search. It worked: I used it to land my current role.
-
-My portfolio and other open source projects → [santifer.io](https://santifer.io)
+This is a Go port of [santifer/career-ops](https://github.com/santifer/career-ops). The original system was built by [Santiago](https://santifer.io), who used it to evaluate 740+ offers, generate 100+ tailored CVs, and land a Head of Applied AI role. The portfolio that pairs with this system is also open source: [cv-santiago](https://github.com/santifer/cv-santiago).
 
 ## License
 
 MIT
-
----
-
-# :es: Version en Español
-
-## Que es esto
-
-Career-Ops convierte Claude Code en un centro de mando de busqueda de empleo. En vez de trackear aplicaciones en un spreadsheet, tienes un pipeline AI que:
-
-- **Evalua ofertas** con scoring estructurado A-F (10 dimensiones ponderadas)
-- **Genera PDFs personalizados** -- CVs ATS-optimizados por oferta
-- **Escanea portales** automaticamente (Greenhouse, Ashby, Lever, webs de empresas)
-- **Procesa en batch** -- evalua 10+ ofertas en paralelo con sub-agentes
-- **Trackea todo** en una fuente de verdad unica con checks de integridad
-
-> **Importante: Esto NO es para spamear empresas.** El objetivo es aplicar solo donde hay match real -- por tu bien y por el de quien lea tu aplicacion. El scoring te ayuda a centrarte en las oportunidades de alto fit en vez de perder el tiempo de todos. Siempre revisa antes de enviar.
-
-Construido por alguien que lo uso para evaluar 740+ ofertas, generar 100+ CVs personalizados, y conseguir un rol de Head of Applied AI. [Lee el case study completo](https://santifer.io/career-ops).
-
-## Inicio rapido
-
-```bash
-# 1. Clonar
-git clone https://github.com/santifer/career-ops.git
-cd career-ops && npm install
-
-# 2. Configurar
-cp config/profile.example.yml config/profile.yml  # Editar con tus datos
-cp templates/portals.example.yml portals.yml       # Personalizar empresas
-
-# 3. Añadir tu CV
-# Crear cv.md en la raiz del proyecto con tu CV en markdown
-
-# 4. Personalizar con Claude
-claude   # Abrir Claude Code en este directorio
-
-# Pidele a Claude que adapte el sistema a ti:
-# "Cambia los arquetipos a roles de backend"
-# "Traduce los modes a ingles"
-# "Añade estas empresas a portals.yml"
-# "Actualiza mi perfil con este CV que te pego"
-
-# 5. Usar
-# Pega una URL de oferta o ejecuta /career-ops
-```
-
-> **El sistema esta diseñado para que Claude lo personalice.** Modes, arquetipos, scoring, scripts de negociacion -- solo pidelo. Claude lee los mismos archivos que usa, asi que sabe exactamente que editar.
-
-Guia completa en [docs/SETUP.md](docs/SETUP.md).
-
-## Portales incluidos
-
-El scanner viene con **45+ empresas** pre-configuradas y **19 queries** en los principales portales de empleo. Copia `templates/portals.example.yml` a `portals.yml` y añade las tuyas:
-
-**AI Labs:** Anthropic, OpenAI, Mistral, Cohere, LangChain, Pinecone
-**Voice AI:** ElevenLabs, PolyAI, Parloa, Hume AI, Deepgram, Vapi, Bland AI
-**Plataformas AI:** Retool, Airtable, Vercel, Temporal, Glean, Arize AI
-**Contact Center:** Ada, LivePerson, Sierra, Decagon, Talkdesk, Genesys
-**Enterprise:** Salesforce, Twilio, Gong, Dialpad
-**LLMOps:** Langfuse, Weights & Biases, Lindy, Cognigy, Speechmatics
-**Automatizacion:** n8n, Zapier, Make.com
-**Europa:** Factorial, Attio, Tinybird, Clarity AI, Travelperk
-
-**Portales de empleo:** Ashby, Greenhouse, Lever, Wellfound, Workable, RemoteFront
-
-## Uso
-
-Career-ops es un unico slash command con multiples modos:
-
-```
-/career-ops                → Mostrar todos los comandos
-/career-ops {pega un JD}   → Pipeline completo (evaluar + PDF + tracker)
-/career-ops scan           → Escanear portales
-/career-ops pdf            → Generar CV ATS-optimizado
-/career-ops batch          → Evaluar ofertas en batch
-/career-ops tracker        → Ver estado de aplicaciones
-/career-ops apply          → Rellenar formularios con IA
-/career-ops pipeline       → Procesar URLs pendientes
-/career-ops contacto       → Mensaje LinkedIn outreach
-/career-ops deep           → Research profundo de empresa
-```
-
-O simplemente pega una URL o descripcion de oferta -- career-ops la detecta y ejecuta el pipeline completo.
-
-## Tambien Open Source
-
-- **[cv-santiago](https://github.com/santifer/cv-santiago)** -- El portfolio (santifer.io) con chatbot IA, dashboard LLMOps y case studies. Si necesitas un portfolio para acompañar tu busqueda de empleo, echale un vistazo.
-
-## Documentacion
-
-- [SETUP.md](docs/SETUP.md) -- Guia de instalacion
-- [CUSTOMIZATION.md](docs/CUSTOMIZATION.md) -- Como personalizar
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) -- Como funciona el sistema
-
-## Let's Connect
-
-[![Website](https://img.shields.io/badge/santifer.io-000?style=for-the-badge&logo=safari&logoColor=white)](https://santifer.io)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/in/santifer)
-[![Email](https://img.shields.io/badge/Email-EA4335?style=for-the-badge&logo=gmail&logoColor=white)](mailto:hola@santifer.io)

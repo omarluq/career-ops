@@ -9,9 +9,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/santifer/career-ops/dashboard/internal/data"
-	"github.com/santifer/career-ops/dashboard/internal/model"
-	"github.com/santifer/career-ops/dashboard/internal/theme"
+	"github.com/omarluq/career-ops/internal/model"
+	"github.com/omarluq/career-ops/internal/states"
+	"github.com/omarluq/career-ops/internal/ui/theme"
 )
 
 // PipelineClosedMsg is emitted when the pipeline screen is dismissed.
@@ -49,7 +49,7 @@ type reportSummary struct {
 	comp      string
 }
 
-// Sort modes
+// Sort modes.
 const (
 	sortScore   = "score"
 	sortDate    = "date"
@@ -57,7 +57,7 @@ const (
 	sortStatus  = "status"
 )
 
-// Filter modes
+// Filter modes.
 const (
 	filterAll       = "all"
 	filterEvaluated = "evaluated"
@@ -209,7 +209,6 @@ func (m PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 		}
 
 	case "s":
-		// Cycle sort mode
 		for i, s := range sortCycle {
 			if s == m.sortMode {
 				m.sortMode = sortCycle[(i+1)%len(sortCycle)]
@@ -338,7 +337,7 @@ func (m *PipelineModel) applyFilterAndSort() {
 
 	currentFilter := pipelineTabs[m.activeTab].filter
 	for _, app := range m.apps {
-		norm := data.NormalizeStatus(app.Status)
+		norm := states.Normalize(app.Status)
 		switch currentFilter {
 		case filterAll:
 			filtered = append(filtered, app)
@@ -369,19 +368,18 @@ func (m *PipelineModel) applyFilterAndSort() {
 		})
 	case sortStatus:
 		sort.SliceStable(filtered, func(i, j int) bool {
-			return data.StatusPriority(filtered[i].Status) < data.StatusPriority(filtered[j].Status)
+			return states.Priority(filtered[i].Status) < states.Priority(filtered[j].Status)
 		})
 	}
 
 	// In grouped mode, always sort by status priority first, then by selected sort within groups
 	if m.viewMode == "grouped" {
 		sort.SliceStable(filtered, func(i, j int) bool {
-			pi := data.StatusPriority(filtered[i].Status)
-			pj := data.StatusPriority(filtered[j].Status)
+			pi := states.Priority(filtered[i].Status)
+			pj := states.Priority(filtered[j].Status)
 			if pi != pj {
 				return pi < pj
 			}
-			// Within same group, use selected sort
 			switch m.sortMode {
 			case sortScore:
 				return filtered[i].Score > filtered[j].Score
@@ -400,7 +398,7 @@ func (m *PipelineModel) applyFilterAndSort() {
 
 // adjustScroll updates scrollOffset so the cursor stays visible.
 func (m *PipelineModel) adjustScroll() {
-	availHeight := m.height - 12 // header + tabs(2) + metrics + sortbar + footer + preview
+	availHeight := m.height - 12
 	if availHeight < 5 {
 		availHeight = 5
 	}
@@ -422,13 +420,12 @@ func (m PipelineModel) cursorLineEstimate() int {
 	if m.viewMode != "grouped" {
 		return m.cursor
 	}
-	// Account for group headers
 	line := 0
 	prevStatus := ""
 	for i, app := range m.filtered {
-		norm := data.NormalizeStatus(app.Status)
+		norm := states.Normalize(app.Status)
 		if norm != prevStatus {
-			line++ // group header
+			line++
 			prevStatus = norm
 		}
 		if i == m.cursor {
@@ -451,15 +448,13 @@ func (m PipelineModel) View() string {
 	preview := m.renderPreview()
 	help := m.renderHelp()
 
-	// Apply scroll to body
 	bodyLines := strings.Split(body, "\n")
 	if m.scrollOffset > 0 && m.scrollOffset < len(bodyLines) {
 		bodyLines = bodyLines[m.scrollOffset:]
 	}
 
-	// Calculate available height for body
 	previewLines := strings.Count(preview, "\n") + 1
-	availHeight := m.height - 7 - previewLines // header + tabs(2) + metrics + sortbar + help + preview
+	availHeight := m.height - 7 - previewLines
 	if availHeight < 3 {
 		availHeight = 3
 	}
@@ -468,7 +463,6 @@ func (m PipelineModel) View() string {
 	}
 	body = strings.Join(bodyLines, "\n")
 
-	// Status picker overlay
 	if m.statusPicker {
 		body = m.overlayStatusPicker(body)
 	}
@@ -510,7 +504,6 @@ func (m PipelineModel) renderTabs() string {
 	var underParts []string
 
 	for i, tab := range pipelineTabs {
-		// Count items for this tab
 		count := m.countForFilter(tab.filter)
 		label := fmt.Sprintf(" %s (%d) ", tab.label, count)
 
@@ -540,7 +533,7 @@ func (m PipelineModel) renderTabs() string {
 func (m PipelineModel) countForFilter(filter string) int {
 	count := 0
 	for _, app := range m.apps {
-		norm := data.NormalizeStatus(app.Status)
+		norm := states.Normalize(app.Status)
 		switch filter {
 		case filterAll:
 			count++
@@ -605,9 +598,8 @@ func (m PipelineModel) renderBody() string {
 	padStyle := lipgloss.NewStyle().Padding(0, 2)
 
 	for i, app := range m.filtered {
-		norm := data.NormalizeStatus(app.Status)
+		norm := states.Normalize(app.Status)
 
-		// Group header in grouped mode
 		if m.viewMode == "grouped" && norm != prevStatus {
 			count := m.countByNormStatus(norm)
 			headerStyle := lipgloss.NewStyle().
@@ -632,42 +624,35 @@ func (m PipelineModel) renderBody() string {
 func (m PipelineModel) renderAppLine(app model.CareerApplication, selected bool) string {
 	padStyle := lipgloss.NewStyle().Padding(0, 2)
 
-	// Column widths
-	scoreW := 5   // "4.5  "
+	scoreW := 5
 	companyW := 20
 	statusW := 12
 	compW := 14
-	// Role gets remaining space
 	roleW := m.width - scoreW - companyW - statusW - compW - 10
 	if roleW < 15 {
 		roleW = 15
 	}
 
-	// Score with color
 	scoreStyle := m.scoreStyle(app.Score)
 	score := scoreStyle.Render(fmt.Sprintf("%.1f", app.Score))
 
-	// Company (truncate)
 	company := app.Company
 	if len(company) > companyW {
 		company = company[:companyW-3] + "..."
 	}
 	companyStyle := lipgloss.NewStyle().Foreground(m.theme.Text).Width(companyW)
 
-	// Role (truncate)
 	role := app.Role
 	if len(role) > roleW {
 		role = role[:roleW-3] + "..."
 	}
 	roleStyle := lipgloss.NewStyle().Foreground(m.theme.Subtext).Width(roleW)
 
-	// Status with color -- fixed column
-	norm := data.NormalizeStatus(app.Status)
+	norm := states.Normalize(app.Status)
 	statusColor := m.statusColorMap()[norm]
-	statusStyle := lipgloss.NewStyle().Foreground(statusColor).Width(statusW)
-	statusText := statusStyle.Render(statusLabel(norm))
+	sStyle := lipgloss.NewStyle().Foreground(statusColor).Width(statusW)
+	statusText := sStyle.Render(statusLabel(norm))
 
-	// Comp from report cache -- fixed column
 	compText := ""
 	if summary, ok := m.reportCache[app.ReportPath]; ok && summary.comp != "" {
 		comp := summary.comp
@@ -711,7 +696,6 @@ func (m PipelineModel) renderPreview() string {
 	valueStyle := lipgloss.NewStyle().Foreground(m.theme.Text)
 	dimStyle := lipgloss.NewStyle().Foreground(m.theme.Subtext)
 
-	// Check report cache
 	if summary, ok := m.reportCache[app.ReportPath]; ok {
 		if summary.archetype != "" {
 			lines = append(lines, padStyle.Render(
@@ -730,7 +714,6 @@ func (m PipelineModel) renderPreview() string {
 				labelStyle.Render("Remote: ")+valueStyle.Render(summary.remote)))
 		}
 	} else if app.Notes != "" {
-		// Fallback: show notes
 		notes := app.Notes
 		if len(notes) > m.width-10 {
 			notes = notes[:m.width-13] + "..."
@@ -755,15 +738,15 @@ func (m PipelineModel) renderHelp() string {
 
 	if m.statusPicker {
 		return style.Render(
-			keyStyle.Render("↑↓") + descStyle.Render(" navigate  ") +
+			keyStyle.Render("\u2191\u2193") + descStyle.Render(" navigate  ") +
 				keyStyle.Render("Enter") + descStyle.Render(" confirm  ") +
 				keyStyle.Render("Esc") + descStyle.Render(" cancel"))
 	}
 
-	brand := lipgloss.NewStyle().Foreground(m.theme.Overlay).Render("career-ops by santifer.io")
+	brand := lipgloss.NewStyle().Foreground(m.theme.Overlay).Render("career-ops")
 
-	keys := keyStyle.Render("↑↓") + descStyle.Render(" nav  ") +
-		keyStyle.Render("←→") + descStyle.Render(" tabs  ") +
+	keys := keyStyle.Render("\u2191\u2193") + descStyle.Render(" nav  ") +
+		keyStyle.Render("\u2190\u2192") + descStyle.Render(" tabs  ") +
 		keyStyle.Render("s") + descStyle.Render(" sort  ") +
 		keyStyle.Render("Enter") + descStyle.Render(" report  ") +
 		keyStyle.Render("o") + descStyle.Render(" open URL  ") +
@@ -780,7 +763,6 @@ func (m PipelineModel) renderHelp() string {
 }
 
 func (m PipelineModel) overlayStatusPicker(body string) string {
-	// Render status picker inline at bottom of body
 	bodyLines := strings.Split(body, "\n")
 
 	pickerWidth := 30
@@ -804,7 +786,6 @@ func (m PipelineModel) overlayStatusPicker(body string) string {
 		picker = append(picker, padStyle.Render(style.Render(prefix+opt)))
 	}
 
-	// Append picker to body
 	bodyLines = append(bodyLines, picker...)
 	return strings.Join(bodyLines, "\n")
 }
@@ -840,7 +821,7 @@ func (m PipelineModel) statusColorMap() map[string]lipgloss.Color {
 func (m PipelineModel) countByNormStatus(status string) int {
 	count := 0
 	for _, app := range m.filtered {
-		if data.NormalizeStatus(app.Status) == status {
+		if states.Normalize(app.Status) == status {
 			count++
 		}
 	}

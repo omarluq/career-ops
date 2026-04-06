@@ -11,6 +11,7 @@ batch/logs/*
 batch/batch-state.tsv
 batch/batch-input.tsv
 batch/tracker-additions/*.tsv
+batch/tracker-additions/merged/
 !batch/tracker-additions/.gitkeep
 jds/*
 !jds/.gitkeep
@@ -19,16 +20,67 @@ jds/*
 config/profile.yml
 portals.yml
 
+# Build artifacts
+bin/
+/career-ops
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.bak
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Module cache
+go/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Temporary files
+tmp/
+*.tmp
+build-errors.log
+
 # Generated
 .resolved-prompt-*
-node_modules/
 
 # OS
 .DS_Store
+Thumbs.db
 *.mov
 *.mp4
+
+# Air (live reload)
+build-errors.log
+
+# Database (future SQLite)
+*.db
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+.env.local
+
+# Task runner cache
+.task/
 
 # Claude Code local
 .claude/settings.local.json
 .claude/memory/
-career-dashboard
+.claude/cache/
+.claude/tsc-cache/
+
+# Resume PDFs (personal, root-level only)
+/Omar_Alani_Resume*.pdf
+/*.pdf
