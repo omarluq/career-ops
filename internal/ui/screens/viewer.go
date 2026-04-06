@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/omarluq/career-ops/internal/ui/theme"
@@ -31,13 +32,34 @@ func NewViewerModel(t theme.Theme, path, title string, width, height int) Viewer
 		content = []byte("Error reading file: " + err.Error())
 	}
 
+	rendered := renderMarkdown(string(content), width)
+
 	return ViewerModel{
-		lines:  strings.Split(string(content), "\n"),
+		lines:  strings.Split(rendered, "\n"),
 		title:  title,
 		width:  width,
 		height: height,
 		theme:  t,
 	}
+}
+
+func renderMarkdown(src string, width int) string {
+	w := width - 4
+	if w < 40 {
+		w = 40
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(w),
+	)
+	if err != nil {
+		return src
+	}
+	out, err := r.Render(src)
+	if err != nil {
+		return src
+	}
+	return strings.TrimRight(out, "\n")
 }
 
 // Init implements tea.Model.
@@ -179,68 +201,11 @@ func (m ViewerModel) renderBody() string {
 	}
 	visible := m.lines[m.scrollOffset:end]
 
-	var styled []string
-	for _, line := range visible {
-		styled = append(styled, m.styleLine(line))
+	for len(visible) < bh {
+		visible = append(visible, "")
 	}
 
-	for len(styled) < bh {
-		styled = append(styled, "")
-	}
-
-	return padStyle.Render(strings.Join(styled, "\n"))
-}
-
-func (m ViewerModel) styleLine(line string) string {
-	trimmed := strings.TrimSpace(line)
-
-	if strings.HasPrefix(trimmed, "# ") {
-		return lipgloss.NewStyle().
-			Bold(true).
-			Foreground(m.theme.Blue).
-			Render(line)
-	}
-	if strings.HasPrefix(trimmed, "## ") {
-		return lipgloss.NewStyle().
-			Bold(true).
-			Foreground(m.theme.Mauve).
-			Render(line)
-	}
-	if strings.HasPrefix(trimmed, "### ") {
-		return lipgloss.NewStyle().
-			Bold(true).
-			Foreground(m.theme.Sky).
-			Render(line)
-	}
-	if trimmed == "---" || trimmed == "***" {
-		return lipgloss.NewStyle().
-			Foreground(m.theme.Overlay).
-			Render(strings.Repeat("\u2500", m.width-4))
-	}
-	if strings.HasPrefix(trimmed, "**") && strings.Contains(trimmed, ":**") {
-		return lipgloss.NewStyle().
-			Foreground(m.theme.Yellow).
-			Render(line)
-	}
-	if strings.HasPrefix(trimmed, "|") && strings.Contains(trimmed, "---") {
-		return lipgloss.NewStyle().
-			Foreground(m.theme.Overlay).
-			Render(line)
-	}
-	if strings.HasPrefix(trimmed, "|") {
-		return lipgloss.NewStyle().
-			Foreground(m.theme.Text).
-			Render(line)
-	}
-	if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
-		return lipgloss.NewStyle().
-			Foreground(m.theme.Text).
-			Render(line)
-	}
-
-	return lipgloss.NewStyle().
-		Foreground(m.theme.Subtext).
-		Render(line)
+	return padStyle.Render(strings.Join(visible, "\n"))
 }
 
 func (m ViewerModel) renderFooter() string {
