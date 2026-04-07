@@ -2,14 +2,19 @@
 
 Thanks for your interest in contributing! Career-Ops is built with Claude Code, and you can use it for development too.
 
+## Issue First
+
+**Before submitting a PR, open an issue to discuss the change.** This avoids wasted effort and helps maintainers give early feedback on direction. Bug reports, feature proposals, and translation suggestions all start as issues.
+
 ## Quick Start
 
-1. Fork the repo
-2. Create a branch (`git checkout -b feature/my-feature`)
-3. Make your changes
-4. Test with a fresh clone (see [docs/SETUP.md](docs/SETUP.md))
-5. Commit and push
-6. Open a Pull Request
+1. Open an issue describing your proposed change
+2. Fork the repo
+3. Create a branch (`git checkout -b feature/my-feature`)
+4. Make your changes
+5. Test with a fresh clone (see [docs/SETUP.md](docs/SETUP.md))
+6. Commit and push
+7. Open a Pull Request referencing the issue
 
 ## What to Contribute
 

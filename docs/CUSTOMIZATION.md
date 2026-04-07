@@ -68,9 +68,11 @@ Career-ops can integrate with external systems via Claude Code hooks. Example ho
 
 Save hooks in `.claude/settings.json`.
 
-## States (templates/states.yml)
+## States
 
-The canonical states rarely need changing. If you add new states, update:
-1. `templates/states.yml`
-2. `normalize-statuses.mjs` (alias mappings)
+Canonical statuses are managed in the `internal/states/` package and defined in `templates/states.yml`. The states rarely need changing. If you add new states, update:
+1. `templates/states.yml` (canonical definitions)
+2. `internal/states/` package (normalization logic and alias mappings)
 3. `modes/_shared.md` (any references)
+
+Normalization is handled by the `career-ops normalize` command.

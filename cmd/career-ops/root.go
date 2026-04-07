@@ -6,7 +6,7 @@ import (
 	"os"
 
 	_ "github.com/charmbracelet/log"
-	_ "github.com/samber/lo"
+	"github.com/samber/lo"
 	_ "github.com/samber/mo"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -29,10 +29,14 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: config/profile.yml)")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "enable verbose output")
+	rootCmd.PersistentFlags().String("db", "career-ops.db", "path to SQLite database")
+	rootCmd.PersistentFlags().Bool("legacy", false, "use legacy markdown parsing instead of SQLite")
 
-	if err := viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose")); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: binding verbose flag: %v\n", err)
-	}
+	lo.ForEach([]string{"verbose", "db", "legacy"}, func(flag string, _ int) {
+		if err := viper.BindPFlag(flag, rootCmd.PersistentFlags().Lookup(flag)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: binding %s flag: %v\n", flag, err)
+		}
+	})
 
 	rootCmd.AddCommand(
 		verifyCmd,
@@ -41,8 +45,13 @@ func init() {
 		mergeCmd,
 		syncCheckCmd,
 		pdfCmd,
+		pdfBatchCmd,
 		batchCmd,
 		dashboardCmd,
+		importCmd,
+		exportCmd,
+		scanCmd,
+		mcpCmd,
 	)
 }
 

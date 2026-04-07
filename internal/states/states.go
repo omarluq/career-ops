@@ -105,18 +105,22 @@ func LoadStates(careerOpsPath string) []State {
 		filepath.Join(careerOpsPath, "templates", "states.yml"),
 		filepath.Join(careerOpsPath, "states.yml"),
 	}
-	for _, p := range paths {
-		data, err := os.ReadFile(filepath.Clean(p))
-		if err != nil {
-			continue
-		}
-		var sf statesFile
-		if err := yaml.Unmarshal(data, &sf); err != nil {
-			continue
-		}
-		if len(sf.States) > 0 {
-			return sf.States
-		}
+	states, found := lo.Find(
+		lo.FilterMap(paths, func(p string, _ int) ([]State, bool) {
+			data, err := os.ReadFile(filepath.Clean(p))
+			if err != nil {
+				return nil, false
+			}
+			var sf statesFile
+			if err := yaml.Unmarshal(data, &sf); err != nil {
+				return nil, false
+			}
+			return sf.States, len(sf.States) > 0
+		}),
+		func(s []State) bool { return len(s) > 0 },
+	)
+	if found {
+		return states
 	}
 	return nil
 }
@@ -234,12 +238,16 @@ func matchExact(lower string) (string, bool) {
 
 // matchContains uses substring matching as a last resort.
 func matchContains(lower string) (string, bool) {
-	for _, entry := range containsFallback {
-		if lo.SomeBy(entry.substrs, func(sub string) bool {
+	match, found := lo.Find(containsFallback, func(entry struct {
+		id      string
+		substrs []string
+	}) bool {
+		return lo.SomeBy(entry.substrs, func(sub string) bool {
 			return strings.Contains(lower, sub)
-		}) {
-			return entry.id, true
-		}
+		})
+	})
+	if found {
+		return match.id, true
 	}
 	return "", false
 }

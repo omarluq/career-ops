@@ -2,6 +2,7 @@ package screens
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,7 +58,7 @@ func NewViewerWithPath(t *theme.Theme, path string, width, height int) (ViewerMo
 		lines:   []string{"Loading..."},
 	}
 	cmd := func() tea.Msg {
-		content, err := os.ReadFile(path) //nolint:gosec // G304: path from trusted internal source
+		content, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			return markdownRenderedMsg{lines: []string{"Error: " + err.Error()}}
 		}
@@ -87,8 +88,6 @@ func renderMarkdown(src string, width int) string {
 }
 
 // Init implements tea.Model.
-//
-//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m ViewerModel) Init() tea.Cmd {
 	return nil
 }
@@ -100,8 +99,6 @@ func (m *ViewerModel) Resize(width, height int) {
 }
 
 // Update handles input for the viewer screen.
-//
-//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m ViewerModel) Update(msg tea.Msg) (ViewerModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case markdownRenderedMsg:
@@ -120,7 +117,6 @@ func (m ViewerModel) Update(msg tea.Msg) (ViewerModel, tea.Cmd) {
 	return m, nil
 }
 
-//nolint:gocritic // hugeParam: required by tea.Model interface (called from Update)
 func (m ViewerModel) handleViewerKeys(msg tea.KeyMsg) (ViewerModel, tea.Cmd) {
 	switch msg.String() {
 	case viewerKeyQ, viewerKeyEsc:
@@ -186,8 +182,6 @@ func (m *ViewerModel) bodyHeight() int {
 }
 
 // View renders the viewer screen.
-//
-//nolint:gocritic // hugeParam: required by tea.Model interface
 func (m ViewerModel) View() string {
 	body := m.renderBody()
 	footer := m.renderFooter()

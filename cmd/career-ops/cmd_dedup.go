@@ -162,50 +162,49 @@ func findDuplicateClusters(
 	linesToRemove = make(map[int]bool)
 	removed = 0
 
-	for _, companyEntries := range groups {
+	lo.ForEach(lo.Values(groups), func(companyEntries []*parsedEntry, _ int) {
 		if len(companyEntries) < 2 {
-			continue
+			return
 		}
 
 		clusters := buildRoleClusters(companyEntries)
-		for _, cluster := range clusters {
-			r := mergeCluster(cluster, lines)
-			for _, idx := range r {
-				linesToRemove[idx] = true
-				removed++
-			}
-		}
-	}
+		indices := lo.FlatMap(clusters, func(cluster []*parsedEntry, _ int) []int {
+			return mergeCluster(cluster, lines)
+		})
+		lo.ForEach(indices, func(idx int, _ int) {
+			linesToRemove[idx] = true
+			removed++
+		})
+	})
 	return linesToRemove, removed
 }
 
 // buildRoleClusters groups entries within a single company by role match.
 func buildRoleClusters(companyEntries []*parsedEntry) [][]*parsedEntry {
-	processed := make(map[int]bool)
-	var clusters [][]*parsedEntry
-
-	for i := 0; i < len(companyEntries); i++ {
-		if processed[i] {
-			continue
-		}
-		cluster := []*parsedEntry{companyEntries[i]}
-		processed[i] = true
-
-		for j := i + 1; j < len(companyEntries); j++ {
-			if processed[j] {
-				continue
-			}
-			if tracker.RoleMatch(companyEntries[i].role, companyEntries[j].role) {
-				cluster = append(cluster, companyEntries[j])
-				processed[j] = true
-			}
-		}
-
-		if len(cluster) >= 2 {
-			clusters = append(clusters, cluster)
-		}
+	type clusterState struct {
+		processed map[int]bool
+		clusters  [][]*parsedEntry
 	}
-	return clusters
+	result := lo.Reduce(lo.Range(len(companyEntries)), func(acc clusterState, i int, _ int) clusterState {
+		if acc.processed[i] {
+			return acc
+		}
+		acc.processed[i] = true
+		// Find all unprocessed entries with matching roles.
+		matches := lo.Filter(lo.Range(len(companyEntries)), func(j int, _ int) bool {
+			return j > i && !acc.processed[j] &&
+				tracker.RoleMatch(companyEntries[i].role, companyEntries[j].role)
+		})
+		lo.ForEach(matches, func(j int, _ int) { acc.processed[j] = true })
+		cluster := append([]*parsedEntry{companyEntries[i]},
+			lo.Map(matches, func(j int, _ int) *parsedEntry { return companyEntries[j] })...,
+		)
+		if len(cluster) >= 2 {
+			acc.clusters = append(acc.clusters, cluster)
+		}
+		return acc
+	}, clusterState{processed: make(map[int]bool)})
+	return result.clusters
 }
 
 // mergeCluster processes a single duplicate cluster: picks the highest-scored keeper,
@@ -218,15 +217,10 @@ func mergeCluster(cluster []*parsedEntry, lines []string) []int {
 	keeper := cluster[0]
 
 	// Check if any duplicate has a more advanced pipeline status.
-	bestRank := states.StatusRank(keeper.status)
-	bestStatus := keeper.status
-	for _, dup := range cluster[1:] {
-		rank := states.StatusRank(dup.status)
-		if rank > bestRank {
-			bestRank = rank
-			bestStatus = dup.status
-		}
-	}
+	bestEntry := lo.MaxBy(cluster, func(a, b *parsedEntry) bool {
+		return states.StatusRank(a.status) > states.StatusRank(b.status)
+	})
+	bestStatus := bestEntry.status
 
 	// Promote keeper's status if a removed entry was further along.
 	if bestStatus != keeper.status {
@@ -252,10 +246,7 @@ func mergeCluster(cluster []*parsedEntry, lines []string) []int {
 
 // removeLines removes the lines at the given indices, returning the filtered result.
 func removeLines(lines []string, toRemove map[int]bool) []string {
-	indices := lo.Keys(toRemove)
-	sort.Sort(sort.Reverse(sort.IntSlice(indices)))
-	for _, idx := range indices {
-		lines = append(lines[:idx], lines[idx+1:]...)
-	}
-	return lines
+	return lo.Filter(lines, func(_ string, i int) bool {
+		return !toRemove[i]
+	})
 }

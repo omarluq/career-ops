@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/samber/lo"
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 
@@ -67,9 +68,9 @@ func runNormalize(_ *cobra.Command, _ []string) error {
 
 	if len(unknowns) > 0 {
 		fmt.Printf("\nWarning: %d unknown statuses:\n", len(unknowns))
-		for _, u := range unknowns {
+		lo.ForEach(unknowns, func(u unknownStatus, _ int) {
 			fmt.Printf("  #%d (line %d): %q\n", u.num, u.line, u.raw)
-		}
+		})
 	}
 
 	fmt.Printf("\n%d statuses normalized\n", changes)
@@ -97,18 +98,21 @@ func runNormalize(_ *cobra.Command, _ []string) error {
 func processNormalization(
 	lines []string,
 ) (int, []unknownStatus) {
-	changes := 0
-	var unknowns []unknownStatus
-
-	for i, line := range lines {
-		changed, unk := normalizeAppLine(lines, i, line)
-		if changed {
-			changes++
-		}
-		if unk != nil {
-			unknowns = append(unknowns, *unk)
-		}
+	type result struct {
+		unk     *unknownStatus
+		changed bool
 	}
+	results := lo.Map(lines, func(line string, i int) result {
+		changed, unk := normalizeAppLine(lines, i, line)
+		return result{changed: changed, unk: unk}
+	})
+	changes := lo.CountBy(results, func(r result) bool { return r.changed })
+	unknowns := lo.FilterMap(results, func(r result, _ int) (unknownStatus, bool) {
+		if r.unk != nil {
+			return *r.unk, true
+		}
+		return unknownStatus{}, false
+	})
 	return changes, unknowns
 }
 

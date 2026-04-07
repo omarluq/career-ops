@@ -65,11 +65,6 @@ linters:
         path: ".*\\.pb\\.go$"
       - linters: [all]
         path: ".*_generated\\.go$"
-      # openURLCmd validates the URL (scheme must be http/https) before passing
-      # to exec.Command; the G204 warning is a false positive.
-      - linters: [gosec]
-        text: "G204"
-        path: "cmd_dashboard\\.go$"
   settings:
     errcheck:
       check-type-assertions: true
@@ -151,6 +146,9 @@ linters:
         - opinionated
         - performance
         - style
+      settings:
+        hugeParam:
+          sizeThreshold: 512
 
     exhaustive:
       default-signifies-exhaustive: true

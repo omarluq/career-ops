@@ -2,17 +2,18 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
-	"runtime"
+
+	"github.com/pkg/browser"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/samber/lo"
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 
+	"github.com/omarluq/career-ops/internal/model"
 	"github.com/omarluq/career-ops/internal/states"
 	"github.com/omarluq/career-ops/internal/tracker"
 	"github.com/omarluq/career-ops/internal/ui/screens"
@@ -141,19 +142,7 @@ func openURLCmd(rawURL string) tea.Cmd {
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return nil
 		}
-		safeURL := parsed.String()
-
-		ctx := context.Background()
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			cmd = exec.CommandContext(ctx, "open", safeURL)
-		case "linux":
-			cmd = exec.CommandContext(ctx, "xdg-open", safeURL)
-		default:
-			cmd = exec.CommandContext(ctx, "open", safeURL)
-		}
-		if err := cmd.Start(); err != nil {
+		if openErr := browser.OpenURL(parsed.String()); openErr != nil {
 			return nil
 		}
 		return nil
@@ -190,17 +179,17 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	pm := screens.NewPipelineModel(&t, apps, metrics, careerOpsPath, 120, 40)
 
 	// Batch-load all report summaries so the preview is ready immediately.
-	for i := range apps {
-		if apps[i].ReportPath == "" {
-			continue
+	lo.ForEach(apps, func(app model.CareerApplication, _ int) {
+		if app.ReportPath == "" {
+			return
 		}
 		archetype, tldr, remote, comp := tracker.LoadReportSummary(
-			careerOpsPath, apps[i].ReportPath,
+			careerOpsPath, app.ReportPath,
 		)
 		if archetype != "" || tldr != "" || remote != "" || comp != "" {
-			pm.EnrichReport(apps[i].ReportPath, archetype, tldr, remote, comp)
+			pm.EnrichReport(app.ReportPath, archetype, tldr, remote, comp)
 		}
-	}
+	})
 
 	m := appModel{
 		pipeline:      &pm,

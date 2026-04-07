@@ -161,21 +161,16 @@ func loadExistingApps(
 	}
 	appLines = strings.Split(string(content), "\n")
 
-	maxNum = 0
-	for _, line := range appLines {
-		if !strings.HasPrefix(line, "|") {
-			continue
-		}
-		if strings.Contains(line, "---") {
-			continue
+	existingApps = lo.FilterMap(appLines, func(line string, _ int) (*parsedAppLine, bool) {
+		if !strings.HasPrefix(line, "|") || strings.Contains(line, "---") {
+			return nil, false
 		}
 		app := parseAppLineRaw(line)
-		if app == nil {
-			continue
-		}
-		existingApps = append(existingApps, app)
-		maxNum = lo.Max([]int{maxNum, app.Num})
-	}
+		return app, app != nil
+	})
+	maxNum = lo.Reduce(existingApps, func(acc int, app *parsedAppLine, _ int) int {
+		return lo.Max([]int{acc, app.Num})
+	}, 0)
 	return appLines, existingApps, maxNum, nil
 }
 
@@ -216,19 +211,19 @@ func processTSVAdditions(
 ) (updatedLines []string, newMaxNum int, stats mergeStats) {
 	var newLines []string
 
-	for _, tsvPath := range tsvFiles {
+	lo.ForEach(tsvFiles, func(tsvPath string, _ int) {
 		filename := filepath.Base(tsvPath)
 		data, err := os.ReadFile(filepath.Clean(tsvPath))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: reading %s: %v\n", filename, err)
 			stats.skipped++
-			continue
+			return
 		}
 
 		addition := tracker.ParseTSVContent(string(data), filename)
 		if addition == nil {
 			stats.skipped++
-			continue
+			return
 		}
 
 		duplicate := findDuplicate(addition, existingApps)
@@ -247,7 +242,7 @@ func processTSVAdditions(
 				num, addition.Company, addition.Role, addition.Score,
 			)
 		}
-	}
+	})
 
 	// Insert new lines after the header separator (|---|...).
 	if len(newLines) > 0 {
@@ -317,22 +312,21 @@ func handleDuplicateAddition(
 	)
 
 	// Find the raw line in appLines and replace it.
-	for i, line := range appLines {
-		if line == duplicate.Raw {
-			notes := fmt.Sprintf(
-				"Re-eval %s (%.1f->%.1f). %s",
-				addition.Date, oldScore, newScore, addition.Notes,
-			)
-			appLines[i] = tracker.FormatTableLine(
-				duplicate.Num, addition.Date,
-				addition.Company, addition.Role,
-				addition.Score, duplicate.Status,
-				duplicate.PDF, addition.Report,
-				strings.TrimSpace(notes),
-			)
-			stats.updated++
-			break
-		}
+	if _, idx, found := lo.FindIndexOf(appLines, func(line string) bool {
+		return line == duplicate.Raw
+	}); found {
+		notes := fmt.Sprintf(
+			"Re-eval %s (%.1f->%.1f). %s",
+			addition.Date, oldScore, newScore, addition.Notes,
+		)
+		appLines[idx] = tracker.FormatTableLine(
+			duplicate.Num, addition.Date,
+			addition.Company, addition.Role,
+			addition.Score, duplicate.Status,
+			duplicate.PDF, addition.Report,
+			strings.TrimSpace(notes),
+		)
+		stats.updated++
 	}
 	return appLines, stats
 }
@@ -359,21 +353,18 @@ func appendNew(
 
 // insertAfterSeparator splices new lines after the markdown table header separator.
 func insertAfterSeparator(appLines, newLines []string) []string {
-	insertIdx := -1
-	for i, line := range appLines {
-		if strings.HasPrefix(line, "|") && strings.Contains(line, "---") {
-			insertIdx = i + 1
-			break
-		}
+	_, idx, found := lo.FindIndexOf(appLines, func(line string) bool {
+		return strings.HasPrefix(line, "|") && strings.Contains(line, "---")
+	})
+	if !found {
+		return appLines
 	}
-	if insertIdx >= 0 {
-		updated := make([]string, 0, len(appLines)+len(newLines))
-		updated = append(updated, appLines[:insertIdx]...)
-		updated = append(updated, newLines...)
-		updated = append(updated, appLines[insertIdx:]...)
-		appLines = updated
-	}
-	return appLines
+	insertIdx := idx + 1
+	updated := make([]string, 0, len(appLines)+len(newLines))
+	updated = append(updated, appLines[:insertIdx]...)
+	updated = append(updated, newLines...)
+	updated = append(updated, appLines[insertIdx:]...)
+	return updated
 }
 
 // writeAndArchive writes the merged content and optionally archives TSVs.
@@ -401,7 +392,7 @@ func archiveTSVs(tsvFiles []string, careerOpsPath string) error {
 	if err := os.MkdirAll(mergedDir, 0o750); err != nil {
 		return oops.Wrapf(err, "creating merged dir")
 	}
-	for _, tsvPath := range tsvFiles {
+	lo.ForEach(tsvFiles, func(tsvPath string, _ int) {
 		dest := filepath.Join(mergedDir, filepath.Base(tsvPath))
 		if err := os.Rename(tsvPath, dest); err != nil {
 			fmt.Fprintf(
@@ -409,21 +400,22 @@ func archiveTSVs(tsvFiles []string, careerOpsPath string) error {
 				filepath.Base(tsvPath), err,
 			)
 		}
-	}
+	})
 	fmt.Printf("Moved %d TSVs to merged/\n", len(tsvFiles))
 	return nil
 }
 
-// extractLeadingNum extracts the leading number from a filename for sorting.
+// extractLeadingNum extracts the first consecutive digit run from a filename for sorting.
 func extractLeadingNum(name string) int {
-	var digits []byte
-	for _, b := range []byte(name) {
-		if b >= '0' && b <= '9' {
-			digits = append(digits, b)
-		} else if len(digits) > 0 {
-			break
-		}
+	isDigit := func(b byte) bool { return b >= '0' && b <= '9' }
+	// Skip leading non-digits, then take consecutive digits.
+	afterSkip := lo.DropWhile([]byte(name), func(b byte) bool { return !isDigit(b) })
+	if len(afterSkip) == 0 {
+		return 0
 	}
+	// Split into [digits, rest] at the first non-digit boundary.
+	_, firstNonDigit, hasNonDigit := lo.FindIndexOf(afterSkip, func(b byte) bool { return !isDigit(b) })
+	digits := lo.Ternary(hasNonDigit, afterSkip[:firstNonDigit], afterSkip)
 	n, err := strconv.Atoi(string(digits))
 	if err != nil {
 		return 0

@@ -36,10 +36,12 @@ func FindAppsFile(careerOpsPath string) (string, error) {
 		filepath.Join(careerOpsPath, "data", "applications.md"),
 		filepath.Join(careerOpsPath, "applications.md"),
 	}
-	for _, p := range paths {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
+	found, ok := lo.Find(paths, func(p string) bool {
+		_, err := os.Stat(p)
+		return err == nil
+	})
+	if ok {
+		return found, nil
 	}
 	return "", oops.Wrapf(nil,
 		"applications.md not found in %s or %s/data/",
@@ -63,16 +65,10 @@ func ParseApplications(
 	}
 
 	lines := strings.Split(string(content), "\n")
-	var apps []model.CareerApplication
 	num := 0
-
-	for _, line := range lines {
-		app, ok := parseLine(line, &num)
-		if !ok {
-			continue
-		}
-		apps = append(apps, app)
-	}
+	apps := lo.FilterMap(lines, func(line string, _ int) (model.CareerApplication, bool) {
+		return parseLine(line, &num)
+	})
 
 	// Enrich with job URLs
 	enrichURLs(careerOpsPath, apps)
@@ -237,35 +233,33 @@ func LoadReportSummary(
 
 // ComputeMetrics calculates aggregate metrics from applications.
 func ComputeMetrics(apps []model.CareerApplication) model.PipelineMetrics {
+	nonActionable := []string{states.StatusSkip, states.StatusRejected, states.StatusDiscarded}
+
+	statuses := lo.Map(apps, func(app model.CareerApplication, _ int) string {
+		return normalizeForMetrics(app.Status)
+	})
+	byStatus := lo.CountValues(statuses)
+
+	scoredApps := lo.Filter(apps, func(app model.CareerApplication, _ int) bool {
+		return app.Score > 0
+	})
+	totalScore := lo.SumBy(scoredApps, func(app model.CareerApplication) float64 {
+		return app.Score
+	})
+	topScore := lo.Reduce(scoredApps, func(acc float64, app model.CareerApplication, _ int) float64 {
+		return lo.Ternary(app.Score > acc, app.Score, acc)
+	}, 0.0)
+
 	m := model.PipelineMetrics{
-		Total:    len(apps),
-		ByStatus: make(map[string]int),
+		Total:      len(apps),
+		ByStatus:   byStatus,
+		TopScore:   topScore,
+		WithPDF:    lo.CountBy(apps, func(app model.CareerApplication) bool { return app.HasPDF }),
+		Actionable: lo.CountBy(statuses, func(s string) bool { return !lo.Contains(nonActionable, s) }),
 	}
 
-	var totalScore float64
-	var scored int
-
-	for i := range apps {
-		status := normalizeForMetrics(apps[i].Status)
-		m.ByStatus[status]++
-
-		if apps[i].Score > 0 {
-			totalScore += apps[i].Score
-			scored++
-			if apps[i].Score > m.TopScore {
-				m.TopScore = apps[i].Score
-			}
-		}
-		if apps[i].HasPDF {
-			m.WithPDF++
-		}
-		if !lo.Contains([]string{states.StatusSkip, states.StatusRejected, states.StatusDiscarded}, status) {
-			m.Actionable++
-		}
-	}
-
-	if scored > 0 {
-		m.AvgScore = totalScore / float64(scored)
+	if len(scoredApps) > 0 {
+		m.AvgScore = totalScore / float64(len(scoredApps))
 	}
 	return m
 }
@@ -350,15 +344,18 @@ func normalizeForMetrics(raw string) string {
 	}
 
 	// Check map entries
-	for _, entry := range metricsNormMap {
-		if lo.Contains(entry.exact, s) {
-			return entry.id
-		}
-		if lo.SomeBy(entry.substrs, func(sub string) bool {
-			return strings.Contains(s, sub)
-		}) {
-			return entry.id
-		}
+	match, found := lo.Find(metricsNormMap, func(entry struct {
+		id      string
+		substrs []string
+		exact   []string
+	}) bool {
+		return lo.Contains(entry.exact, s) ||
+			lo.SomeBy(entry.substrs, func(sub string) bool {
+				return strings.Contains(s, sub)
+			})
+	})
+	if found {
+		return match.id
 	}
 
 	return s
@@ -376,12 +373,12 @@ func enrichURLs(careerOpsPath string, apps []model.CareerApplication) {
 	batchURLs := loadBatchInputURLs(careerOpsPath)
 	reportNumURLs := loadJobURLs(careerOpsPath)
 
-	for i := range apps {
+	lo.ForEach(lo.Range(len(apps)), func(i int, _ int) {
 		enrichAppFromReport(
 			careerOpsPath, &apps[i],
 			batchURLs, reportNumURLs,
 		)
-	}
+	})
 
 	// Strategy 4: scan-history.tsv
 	enrichFromScanHistory(careerOpsPath, apps)
@@ -436,26 +433,28 @@ func loadBatchInputURLs(careerOpsPath string) map[string]string {
 	if err != nil {
 		return nil
 	}
-	result := make(map[string]string)
-	for _, line := range strings.Split(string(inputData), "\n") {
+	lines := strings.Split(string(inputData), "\n")
+	pairs := lo.FilterMap(lines, func(line string, _ int) (lo.Tuple2[string, string], bool) {
 		fields := strings.Split(line, "\t")
 		if len(fields) < 4 || fields[0] == "id" {
-			continue
+			return lo.Tuple2[string, string]{}, false
 		}
 		id := fields[0]
 		notes := fields[3]
 		if idx := strings.LastIndex(notes, "| "); idx >= 0 {
 			u := strings.TrimSpace(notes[idx+2:])
 			if strings.HasPrefix(u, "http") {
-				result[id] = u
-				continue
+				return lo.T2(id, u), true
 			}
 		}
 		if strings.HasPrefix(fields[1], "http") {
-			result[id] = fields[1]
+			return lo.T2(id, fields[1]), true
 		}
-	}
-	return result
+		return lo.Tuple2[string, string]{}, false
+	})
+	return lo.Associate(pairs, func(t lo.Tuple2[string, string]) (string, string) {
+		return t.A, t.B
+	})
 }
 
 // batchEntry holds parsed batch input data for URL resolution.
@@ -485,18 +484,21 @@ func parseBatchInputEntries(
 		return nil
 	}
 
-	entries := make(map[string]batchEntry)
-	for _, line := range strings.Split(string(inputData), "\n") {
+	lines := strings.Split(string(inputData), "\n")
+	pairs := lo.FilterMap(lines, func(line string, _ int) (lo.Tuple2[string, batchEntry], bool) {
 		fields := strings.Split(line, "\t")
 		if len(fields) < 4 || fields[0] == "id" {
-			continue
+			return lo.Tuple2[string, batchEntry]{}, false
 		}
 		e := parseBatchInputLine(fields)
-		if e.url != "" {
-			entries[fields[0]] = e
+		if e.url == "" {
+			return lo.Tuple2[string, batchEntry]{}, false
 		}
-	}
-	return entries
+		return lo.T2(fields[0], e), true
+	})
+	return lo.Associate(pairs, func(t lo.Tuple2[string, batchEntry]) (string, batchEntry) {
+		return t.A, t.B
+	})
 }
 
 // parseBatchInputLine extracts a batchEntry from TSV fields.
@@ -537,30 +539,65 @@ func matchBatchStateToReports(
 		return nil
 	}
 
-	reportToURL := make(map[string]string)
-	for _, line := range strings.Split(string(stateData), "\n") {
+	lines := strings.Split(string(stateData), "\n")
+	pairs := lo.FlatMap(lines, func(line string, _ int) []lo.Tuple2[string, string] {
 		fields := strings.Split(line, "\t")
 		if len(fields) < 6 || fields[0] == "id" {
-			continue
+			return nil
 		}
-		id := fields[0]
-		status := fields[2]
-		reportNum := fields[5]
+		id, status, reportNum := fields[0], fields[2], fields[5]
 		if status != "completed" || reportNum == "" || reportNum == "-" {
-			continue
+			return nil
 		}
-		if e, ok := entries[id]; ok {
-			reportToURL[reportNum] = e.url
-			if len(reportNum) < 3 {
-				reportToURL[fmt.Sprintf("%03s", reportNum)] = e.url
-			}
+		e, ok := entries[id]
+		if !ok {
+			return nil
 		}
-	}
-	return reportToURL
+		result := []lo.Tuple2[string, string]{lo.T2(reportNum, e.url)}
+		if len(reportNum) < 3 {
+			result = append(result, lo.T2(fmt.Sprintf("%03s", reportNum), e.url))
+		}
+		return result
+	})
+	return lo.Associate(pairs, func(t lo.Tuple2[string, string]) (string, string) {
+		return t.A, t.B
+	})
 }
 
 type scanEntry struct {
 	url, company, title string
+}
+
+// companyURLEntry holds a role/URL pair for company-based URL matching.
+type companyURLEntry struct {
+	role, url string
+}
+
+// enrichByCompanyLookup is a generic enrichment strategy that loads entries grouped
+// by company, then matches each app's company to find a URL. The getURL function
+// extracts a URL from a single match; bestMatch selects the best URL from multiple matches.
+func enrichByCompanyLookup[T any](
+	apps []model.CareerApplication,
+	lookup map[string][]T,
+	getURL func(T) string,
+	bestMatch func(appRole string, matches []T) string,
+) {
+	if lookup == nil {
+		return
+	}
+	lo.ForEach(lo.Range(len(apps)), func(i int, _ int) {
+		if apps[i].JobURL != "" {
+			return
+		}
+		key := NormalizeCompany(apps[i].Company)
+		matches := lookup[key]
+		switch {
+		case len(matches) == 1:
+			apps[i].JobURL = getURL(matches[0])
+		case len(matches) > 1:
+			apps[i].JobURL = bestMatch(apps[i].Role, matches)
+		}
+	})
 }
 
 func enrichFromScanHistory(
@@ -568,22 +605,10 @@ func enrichFromScanHistory(
 	apps []model.CareerApplication,
 ) {
 	byCompany := loadScanHistoryByCompany(careerOpsPath)
-	if byCompany == nil {
-		return
-	}
-
-	for i := range apps {
-		if apps[i].JobURL != "" {
-			continue
-		}
-		key := NormalizeCompany(apps[i].Company)
-		matches := byCompany[key]
-		if len(matches) == 1 {
-			apps[i].JobURL = matches[0].url
-		} else if len(matches) > 1 {
-			apps[i].JobURL = bestScanMatch(apps[i].Role, matches)
-		}
-	}
+	enrichByCompanyLookup(apps, byCompany,
+		func(e scanEntry) string { return e.url },
+		bestScanMatch,
+	)
 }
 
 // loadScanHistoryByCompany reads scan-history.tsv and groups entries
@@ -596,27 +621,21 @@ func loadScanHistoryByCompany(
 	if err != nil {
 		return nil
 	}
-	byCompany := make(map[string][]scanEntry)
-	for _, line := range strings.Split(string(scanData), "\n") {
+	lines := strings.Split(string(scanData), "\n")
+	entries := lo.FilterMap(lines, func(line string, _ int) (scanEntry, bool) {
 		fields := strings.Split(line, "\t")
 		if len(fields) < 5 || fields[0] == "url" {
-			continue
+			return scanEntry{}, false
 		}
-		url := fields[0]
-		if url == "" || !strings.HasPrefix(url, "http") {
-			continue
+		u := fields[0]
+		if u == "" || !strings.HasPrefix(u, "http") {
+			return scanEntry{}, false
 		}
-		key := NormalizeCompany(fields[4])
-		byCompany[key] = append(byCompany[key], scanEntry{
-			url: url, company: fields[4], title: fields[3],
-		})
-	}
-	return byCompany
-}
-
-// companyURLEntry holds a role/URL pair for company-based URL matching.
-type companyURLEntry struct {
-	role, url string
+		return scanEntry{url: u, company: fields[4], title: fields[3]}, true
+	})
+	return lo.GroupBy(entries, func(e scanEntry) string {
+		return NormalizeCompany(e.company)
+	})
 }
 
 func enrichAppURLsByCompany(
@@ -624,24 +643,10 @@ func enrichAppURLsByCompany(
 	apps []model.CareerApplication,
 ) {
 	byCompany := loadBatchInputByCompany(careerOpsPath)
-	if byCompany == nil {
-		return
-	}
-
-	for i := range apps {
-		if apps[i].JobURL != "" {
-			continue
-		}
-		key := NormalizeCompany(apps[i].Company)
-		matches := byCompany[key]
-		if len(matches) == 1 {
-			apps[i].JobURL = matches[0].url
-		} else if len(matches) > 1 {
-			apps[i].JobURL = bestCompanyMatch(
-				apps[i].Role, matches,
-			)
-		}
-	}
+	enrichByCompanyLookup(apps, byCompany,
+		func(e companyURLEntry) string { return e.url },
+		bestCompanyMatch,
+	)
 }
 
 // loadBatchInputByCompany reads batch-input.tsv and groups entries
@@ -657,22 +662,29 @@ func loadBatchInputByCompany(
 		return nil
 	}
 
-	byCompany := make(map[string][]companyURLEntry)
-	for _, line := range strings.Split(string(inputData), "\n") {
+	lines := strings.Split(string(inputData), "\n")
+	type keyedEntry struct {
+		key   string
+		entry companyURLEntry
+	}
+	keyed := lo.FilterMap(lines, func(line string, _ int) (keyedEntry, bool) {
 		fields := strings.Split(line, "\t")
 		if len(fields) < 4 || fields[0] == "id" {
-			continue
+			return keyedEntry{}, false
 		}
 		e := parseBatchInputLine(fields)
 		if e.url == "" || e.company == "" {
-			continue
+			return keyedEntry{}, false
 		}
-		key := NormalizeCompany(e.company)
-		byCompany[key] = append(byCompany[key], companyURLEntry{
-			role: e.role, url: e.url,
-		})
-	}
-	return byCompany
+		return keyedEntry{
+			key:   NormalizeCompany(e.company),
+			entry: companyURLEntry{role: e.role, url: e.url},
+		}, true
+	})
+	grouped := lo.GroupBy(keyed, func(k keyedEntry) string { return k.key })
+	return lo.MapValues(grouped, func(entries []keyedEntry, _ string) []companyURLEntry {
+		return lo.Map(entries, func(k keyedEntry, _ int) companyURLEntry { return k.entry })
+	})
 }
 
 // bestCompanyMatch finds the best URL match by role word overlap.
@@ -681,32 +693,20 @@ func bestCompanyMatch(
 	matches []companyURLEntry,
 ) string {
 	appRoleLower := strings.ToLower(appRole)
-	best := matches[0].url
-	bestScore := 0
-	for _, m := range matches {
-		score := wordOverlapScore(
-			appRoleLower, strings.ToLower(m.role),
-		)
-		if score > bestScore {
-			bestScore = score
-			best = m.url
-		}
-	}
-	return best
+	best := lo.MaxBy(matches, func(a, b companyURLEntry) bool {
+		return wordOverlapScore(appRoleLower, strings.ToLower(a.role)) >
+			wordOverlapScore(appRoleLower, strings.ToLower(b.role))
+	})
+	return best.url
 }
 
 func bestScanMatch(appRole string, matches []scanEntry) string {
 	role := strings.ToLower(appRole)
-	best := matches[0].url
-	bestScore := 0
-	for _, m := range matches {
-		score := wordOverlapScore(role, strings.ToLower(m.title))
-		if score > bestScore {
-			bestScore = score
-			best = m.url
-		}
-	}
-	return best
+	best := lo.MaxBy(matches, func(a, b scanEntry) bool {
+		return wordOverlapScore(role, strings.ToLower(a.title)) >
+			wordOverlapScore(role, strings.ToLower(b.title))
+	})
+	return best.url
 }
 
 // wordOverlapScore counts how many significant words (len>2) from

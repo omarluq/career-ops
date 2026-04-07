@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/samber/lo"
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -60,15 +61,15 @@ func runSyncCheck(_ *cobra.Command, _ []string) error {
 	} else {
 		if len(errors) > 0 {
 			fmt.Printf("ERRORS (%d):\n", len(errors))
-			for _, e := range errors {
+			lo.ForEach(errors, func(e string, _ int) {
 				fmt.Printf("  ERROR: %s\n", e)
-			}
+			})
 		}
 		if len(warnings) > 0 {
 			fmt.Printf("\nWARNINGS (%d):\n", len(warnings))
-			for _, w := range warnings {
+			lo.ForEach(warnings, func(w string, _ int) {
 				fmt.Printf("  WARN: %s\n", w)
-			}
+			})
 		}
 	}
 
@@ -93,14 +94,14 @@ func checkRequiredFiles(root string, errors *[]string) {
 		{"templates/cv-template.html", "HTML template for CV/PDF generation"},
 	}
 
-	for _, f := range required {
+	lo.ForEach(required, func(f requiredFile, _ int) {
 		p := filepath.Join(root, f.rel)
 		if _, err := os.Stat(p); os.IsNotExist(err) {
 			*errors = append(*errors, fmt.Sprintf(
 				"%s not found. %s", f.rel, f.desc,
 			))
 		}
-	}
+	})
 }
 
 // checkCVLength warns if cv.md exists but is suspiciously short.
@@ -123,11 +124,11 @@ func validateYAML(root string, errors *[]string) {
 		"portals.yml",
 		"templates/states.yml",
 	}
-	for _, rel := range yamlFiles {
+	lo.ForEach(yamlFiles, func(rel string, _ int) {
 		p := filepath.Clean(filepath.Join(root, rel))
 		data, err := os.ReadFile(p)
 		if err != nil {
-			continue // already reported as missing above
+			return // already reported as missing above
 		}
 		var doc interface{}
 		if unmarshalErr := yaml.Unmarshal(data, &doc); unmarshalErr != nil {
@@ -135,7 +136,7 @@ func validateYAML(root string, errors *[]string) {
 				"%s is not valid YAML: %v", rel, unmarshalErr,
 			))
 		}
-	}
+	})
 }
 
 // checkProfile verifies that profile.yml has required fields and no example data.
@@ -147,13 +148,13 @@ func checkProfile(root string, warnings *[]string) {
 	}
 	content := string(data)
 	requiredFields := []string{"full_name", "email", "location"}
-	for _, field := range requiredFields {
+	lo.ForEach(requiredFields, func(field string, _ int) {
 		if !strings.Contains(content, field) {
 			*warnings = append(*warnings, fmt.Sprintf(
 				"config/profile.yml is missing field: %s", field,
 			))
 		}
-	}
+	})
 	if strings.Contains(content, `"Jane Smith"`) ||
 		strings.Contains(content, `Jane Smith`) {
 		*warnings = append(*warnings,
@@ -174,17 +175,20 @@ func checkHardcodedMetrics(root string, warnings *[]string) {
 		{"batch/batch-prompt.md", "batch-prompt.md"},
 	}
 
-	for _, pf := range promptFiles {
+	lo.ForEach(promptFiles, func(pf struct {
+		rel  string
+		name string
+	}, _ int) {
 		p := filepath.Clean(filepath.Join(root, pf.rel))
 		fh, err := os.Open(p)
 		if err != nil {
-			continue
+			return
 		}
 		scanPromptFile(fh, pf.name, metricPattern, warnings)
 		if closeErr := fh.Close(); closeErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: closing %s: %v\n", pf.name, closeErr)
 		}
-	}
+	})
 }
 
 // scanPromptFile scans a single file for hardcoded metric patterns.

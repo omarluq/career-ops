@@ -27,6 +27,9 @@ Determine the mode from `{{mode}}`:
 | `apply` | `apply` |
 | `scan` | `scan` |
 | `batch` | `batch` |
+| `import` | `import` |
+| `export` | `export` |
+| `mcp` | `mcp` |
 
 **Auto-pipeline detection:** If `{{mode}}` is not a known sub-command AND contains JD text (keywords: "responsibilities", "requirements", "qualifications", "about the role", "we're looking for", company name + role) or a URL to a JD, execute `auto-pipeline`.
 
@@ -55,6 +58,9 @@ Available commands:
   /career-ops apply     → Live application assistant (reads form + generates answers)
   /career-ops scan      → Scan portals and discover new offers
   /career-ops batch     → Batch processing with parallel workers
+  /career-ops import    → Import markdown data into SQLite database
+  /career-ops export    → Export SQLite data to markdown format
+  /career-ops mcp       → Start MCP server for AI agent integration
 
 Inbox: add URLs to data/pipeline.md → /career-ops pipeline
 Or paste a JD directly to run the full pipeline.
@@ -88,3 +94,13 @@ Agent(
 ```
 
 Execute the instructions from the loaded mode file.
+
+---
+
+## Database Commands
+
+These commands manage the SQLite database that backs the application tracker:
+
+- `import`: Reads existing `data/applications.md`, `data/pipeline.md`, and `data/scan-history.tsv` and inserts all records into SQLite
+- `export`: Writes SQLite data back to markdown/TSV format. Supports `--format` (applications, pipeline, scan-history) and `--output` flags
+- `mcp`: Starts the MCP (Model Context Protocol) server on stdio. Exposes tools: search_applications, list_applications, get_application, update_status, add_to_pipeline, pipeline_status. Exposes resources: applications://list, metrics://pipeline

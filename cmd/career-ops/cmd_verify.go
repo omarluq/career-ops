@@ -145,37 +145,34 @@ func checkStatuses(r *verifyResult, apps []model.CareerApplication) {
 
 // checkDuplicates detects duplicate company+role entries.
 func checkDuplicates(r *verifyResult, apps []model.CareerApplication) {
-	type group struct {
+	type appKey struct {
+		key     string
 		company string
 		role    string
-		nums    []int
+		num     int
 	}
 
-	groups := make(map[string]*group)
-	for i := range apps {
-		key := tracker.NormalizeCompanyKey(apps[i].Company) + "::" + strings.ToLower(apps[i].Role)
-		if g, ok := groups[key]; ok {
-			g.nums = append(g.nums, apps[i].Number)
-		} else {
-			groups[key] = &group{
-				company: apps[i].Company,
-				role:    apps[i].Role,
-				nums:    []int{apps[i].Number},
-			}
+	keyed := lo.Map(apps, func(app model.CareerApplication, _ int) appKey {
+		return appKey{
+			key:     tracker.NormalizeCompanyKey(app.Company) + "::" + strings.ToLower(app.Role),
+			company: app.Company,
+			role:    app.Role,
+			num:     app.Number,
 		}
-	}
+	})
+	groups := lo.GroupBy(keyed, func(k appKey) string { return k.key })
 
-	dupes := 0
-	for _, g := range groups {
-		if len(g.nums) > 1 {
-			numStrs := lo.Map(g.nums, func(n int, _ int) string {
-				return fmt.Sprintf("#%d", n)
-			})
-			r.warnf("Possible duplicates: %s (%s -- %s)",
-				strings.Join(numStrs, ", "), g.company, g.role)
-			dupes++
+	dupes := lo.CountBy(lo.Values(groups), func(entries []appKey) bool {
+		if len(entries) <= 1 {
+			return false
 		}
-	}
+		numStrs := lo.Map(entries, func(e appKey, _ int) string {
+			return fmt.Sprintf("#%d", e.num)
+		})
+		r.warnf("Possible duplicates: %s (%s -- %s)",
+			strings.Join(numStrs, ", "), entries[0].company, entries[0].role)
+		return true
+	})
 	if dupes == 0 {
 		okMsg("No exact duplicates found")
 	}

@@ -6,6 +6,7 @@
 ![Claude Code](https://img.shields.io/badge/Claude_Code-000?style=flat&logo=anthropic&logoColor=white)
 ![Bubble Tea](https://img.shields.io/badge/Bubble_Tea-FF75B5?style=flat&logo=go&logoColor=white)
 ![chromedp](https://img.shields.io/badge/chromedp-4285F4?style=flat&logo=googlechrome&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white)
 ![golangci--lint](https://img.shields.io/badge/golangci--lint-00ACD7?style=flat&logo=go&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
@@ -23,6 +24,8 @@ The original career-ops runs on Node.js with 6 separate `.mjs` scripts and Playw
 | Separate `dashboard/` directory | `career-ops dashboard` subcommand |
 | npm scripts / package.json | go-task (Taskfile.yml) |
 | Node.js runtime required | Zero runtime dependencies |
+| Markdown tables for data | SQLite database (modernc.org/sqlite, pure Go) |
+| No MCP support | MCP server (stdio transport) for AI agent integration |
 
 Everything else -- modes, templates, scoring, portals, batch processing -- remains identical to upstream.
 
@@ -39,6 +42,9 @@ Everything else -- modes, templates, scoring, portals, batch processing -- remai
 | **Batch Processing** | Parallel evaluation with `claude -p` workers |
 | **Dashboard TUI** | Bubble Tea terminal UI to browse, filter, and sort your pipeline |
 | **Pipeline Integrity** | Automated merge, dedup, status normalization, health checks |
+| **SQLite Storage** | Application data, pipeline, scan history stored in SQLite with FTS5 search |
+| **MCP Server** | Model Context Protocol server for AI agent tool integration |
+| **Import/Export** | Bidirectional migration between markdown and SQLite formats |
 
 ## Quick Start
 
@@ -94,18 +100,21 @@ career-ops sync-check   # Validate setup consistency
 career-ops pdf <in> <out> [--format=letter|a4]  # Generate PDF from HTML
 career-ops batch        # Run batch processing
 career-ops dashboard    # Launch the TUI pipeline viewer
+career-ops import       # Import markdown data into SQLite
+career-ops export       # Export SQLite data to markdown
+career-ops mcp          # Start MCP server (stdio transport)
 ```
 
 Or use go-task for development shortcuts:
 
 ```bash
-task build       # Build binary to ./bin/
-task install     # Install to $GOPATH/bin
-task test        # Run tests with race detector
-task lint        # Run golangci-lint
-task fmt         # Format and auto-fix
-task ci          # Full CI pipeline (fmt + lint + test + build)
-task dashboard   # Build and launch TUI
+mise exec -- task build       # Build binary to ./bin/
+mise exec -- task install     # Install to $GOPATH/bin
+mise exec -- task test        # Run tests with race detector
+mise exec -- task lint        # Run golangci-lint
+mise exec -- task fmt         # Format and auto-fix
+mise exec -- task ci          # Full CI pipeline (fmt + lint + test + build)
+mise exec -- task dashboard   # Build and launch TUI
 ```
 
 ## Usage with Claude Code
@@ -182,13 +191,25 @@ career-ops/
 │   ├── cmd_batch.go
 │   └── cmd_dashboard.go
 ├── internal/                   # Library packages
-│   ├── model/                  # Data models
+│   ├── closer/                 # Deferred close error handling
+│   ├── db/                     # SQLite database layer
+│   │   ├── application.go      # Application entity (model + CRUD)
+│   │   ├── pipeline_entry.go   # Pipeline entity
+│   │   ├── scan_record.go      # Scan history entity
+│   │   ├── evaluation.go       # Evaluation entity
+│   │   ├── validation.go       # Input validation
+│   │   └── migrations/         # Goose SQL migrations
+│   ├── mcp/                    # MCP server (tools + resources)
+│   ├── model/                  # Shared data models
+│   ├── repo/                   # Repository interface + SQLite impl
+│   ├── scanner/                # Concurrent portal scanner
 │   ├── states/                 # Canonical status management
-│   ├── tracker/                # Markdown table parsing, TSV, fuzzy matching
+│   ├── tracker/                # Markdown parsing, TSV, fuzzy matching
 │   ├── ui/                     # Bubble Tea dashboard
 │   │   ├── screens/            # Pipeline and viewer screens
-│   │   └── theme/              # Catppuccin Mocha theme + Lipgloss
-│   └── vinfo/                  # Version info (injected at build)
+│   │   └── theme/              # Catppuccin Mocha theme
+│   ├── vinfo/                  # Version info (injected at build)
+│   └── worker/                 # Generic worker pool + fan-out
 ├── modes/                      # 14 Claude skill modes
 │   ├── _shared.md
 │   ├── oferta.md
@@ -230,7 +251,9 @@ career-ops/
 | **Tool Management** | mise |
 | **Linting** | golangci-lint v2 |
 | **Agent** | Claude Code with custom skill modes |
-| **Data** | Markdown tables + YAML config + TSV batch files |
+| **Data** | SQLite (modernc.org/sqlite, pure Go, CGO-free) + ksql + goose migrations |
+| **Functional Go** | samber/lo (collections) + samber/oops (errors) + samber/mo (monads) |
+| **MCP** | mark3labs/mcp-go v0.47 (stdio transport) |
 
 ## Ethical Use
 

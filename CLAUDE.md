@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build
-task build              # Build binary with version injection
-task install            # Install to $GOPATH/bin
+mise exec -- task build              # Build binary with version injection
+mise exec -- task install            # Install to $GOPATH/bin
 
 # Pipeline integrity
 career-ops verify       # Health check (statuses, dupes, links)
@@ -17,6 +17,10 @@ career-ops merge        # Merge batch TSV additions into applications.md
 career-ops dedup        # Remove duplicate entries
 career-ops normalize    # Map aliases to canonical statuses
 career-ops sync-check   # Validate setup consistency
+
+# Data migration
+career-ops import                                         # Import markdown data into SQLite
+career-ops export [--format applications|pipeline|scan-history] [--output file]  # Export SQLite to markdown
 
 # PDF generation (requires Chrome/Chromium installed)
 career-ops pdf <input.html> <output.pdf> [--format=letter|a4]
@@ -27,11 +31,14 @@ career-ops batch        # (not yet implemented)
 # Dashboard TUI
 career-ops dashboard [--path .]
 
+# MCP server
+career-ops mcp          # Start MCP server (stdio transport)
+
 # Development
-task test               # Run tests
-task lint               # golangci-lint
-task fmt                # Auto-fix lint issues
-task ci                 # lint + test
+mise exec -- task test               # Run tests
+mise exec -- task lint               # golangci-lint
+mise exec -- task fmt                # Auto-fix lint issues
+mise exec -- task ci                 # lint + test
 ```
 
 ## Origin
@@ -58,6 +65,11 @@ AI-powered job search automation built on Claude Code: pipeline tracking, offer 
 | `article-digest.md` | Compact proof points from portfolio (optional) |
 | `interview-prep/story-bank.md` | Accumulated STAR+R stories across evaluations |
 | `reports/` | Evaluation reports (format: `{###}-{company-slug}-{YYYY-MM-DD}.md`) |
+| `internal/db/` | SQLite database layer (entity files, migrations, validation) |
+| `internal/repo/` | Repository interface + SQLite implementation |
+| `internal/mcp/` | MCP server (tools + resources) |
+| `internal/worker/` | Generic worker pool, fan-out, batch processing |
+| `internal/closer/` | Deferred close error handling |
 
 ### First Run — Onboarding (IMPORTANT)
 
@@ -107,7 +119,18 @@ If `data/applications.md` doesn't exist, create it:
 |---|------|---------|------|-------|--------|-----|--------|-------|
 ```
 
-#### Step 5: Ready
+#### Step 5: Get to Know the User
+Once the basics are in place, proactively learn about the user to personalize evaluations and CV generation:
+> "Before we start evaluating offers, I'd like to understand you better. This helps me write stronger applications and spot the right opportunities:
+>
+> 1. **Superpowers:** What are your unique strengths? What do you do better than most people in your field?
+> 2. **Preferences:** Remote, hybrid, or on-site? Company size preference (startup, mid-size, enterprise)? Any industry preferences?
+> 3. **Deal-breakers:** Anything that's an automatic no? (e.g., mandatory relocation, specific technologies you refuse to work with, minimum comp, visa requirements)
+> 4. **Key accomplishments:** What are 2-3 achievements you're most proud of? These become your go-to proof points in applications."
+
+Store their answers in `config/profile.yml` under the relevant sections (preferences, deal_breakers, proof_points). Use this context in every evaluation and CV generation going forward.
+
+#### Step 6: Ready
 Once all files exist, confirm:
 > "You're all set! You can now:
 > - Paste a job URL to evaluate it
@@ -166,7 +189,7 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 **This system is designed for quality, not quantity.** The goal is to help the user find and apply to roles where there is a genuine match -- not to spam companies with mass applications.
 
 - **NEVER submit an application without the user reviewing it first.** Fill forms, draft answers, generate PDFs -- but always STOP before clicking Submit/Send/Apply. The user makes the final call.
-- **Discourage low-fit applications.** If a score is below 3.0/5, explicitly tell the user this is a weak match and recommend skipping unless they have a specific reason.
+- **Discourage low-fit applications.** If a score is below 4.0/5, explicitly tell the user this is a weak match and recommend skipping unless they have a specific reason.
 - **Quality over speed.** A well-targeted application to 5 companies beats a generic blast to 50. Guide the user toward fewer, better applications.
 - **Respect recruiters' time.** Every application a human reads costs someone's attention. Only send what's worth reading.
 
@@ -183,7 +206,13 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 
 ## Stack and Conventions
 
-- Go (cobra CLI, chromedp for PDF, bubbletea for TUI), YAML (config), HTML/CSS (template), Markdown (data)
+- Go (cobra CLI, chromedp for PDF, bubbletea for TUI, **SQLite via modernc.org/sqlite**), YAML (config), HTML/CSS (template), Markdown (data)
+- **ksql** (vingarcia/ksql) for entity CRUD, raw SQL for FTS5/aggregation
+- **goose** (pressly/goose/v3) for migrations in `internal/db/migrations/`
+- **samber/lo** for all collection operations (Map, Filter, GroupBy, ForEach, etc.) — NEVER manual for loops
+- **samber/oops** for all error wrapping — NEVER fmt.Errorf
+- **samber/mo** for monads (Result, Option) in worker pool returns
+- **mcp-go** (mark3labs/mcp-go v0.47) for MCP server
 - CLI source in `cmd/career-ops/`, library code in `internal/`
 - Output in `output/` (gitignored), Reports in `reports/`
 - JDs in `jds/` (referenced as `local:jds/{file}` in pipeline.md)
@@ -191,6 +220,17 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 - Report numbering: sequential 3-digit zero-padded, max existing + 1
 - **RULE: After each batch of evaluations, run `career-ops merge`** to merge tracker additions and avoid duplications.
 - **RULE: NEVER create new entries in applications.md if company+role already exists.** Update the existing entry.
+
+### Go Conventions
+
+- **Collections**: Use `samber/lo` for ALL collection operations. Never write manual for loops.
+- **Errors**: Use `samber/oops` for ALL error wrapping. Never use `fmt.Errorf`.
+- **Monads**: Use `samber/mo` (Result, Option) for worker pool returns.
+- **Validation**: Manual validation with `validationError` collector in `internal/db/validation.go`.
+- **Entity pattern**: Each entity (Application, PipelineEntry, ScanRecord, Evaluation) gets its own file in `internal/db/` with model struct, ksql table definition, and CRUD methods.
+- **Migrations**: Each migration in its own `.sql` file under `internal/db/migrations/` with goose up/down annotations.
+- **Lint**: Zero tolerance -- no `//nolint` directives, no `.golangci.yml` exclusion rules. Fix the actual code.
+- **Task runner**: Always use `mise exec -- task` prefix (never bare `task`).
 
 ### TSV Format for Tracker Additions
 
@@ -222,6 +262,12 @@ Write one TSV file per evaluation to `batch/tracker-additions/{num}-{company-slu
 5. Health check: `career-ops verify`
 6. Normalize statuses: `career-ops normalize`
 7. Dedup: `career-ops dedup`
+8. Import markdown into SQLite: `career-ops import`
+9. Export SQLite back to markdown: `career-ops export`
+
+### Batch Processing -- Headless Fallback
+
+> When running in headless mode (`claude -p`), chromedp may not be available. Use WebFetch as a fallback for JD extraction, but flag the result as "unconfirmed" since WebFetch may not render JavaScript-heavy pages.
 
 ### Canonical States (applications.md)
 
