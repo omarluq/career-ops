@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/samber/lo"
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
+	"github.com/omarluq/career-ops/internal/closer"
+	"github.com/omarluq/career-ops/internal/db"
 	"github.com/omarluq/career-ops/internal/scanner"
 )
 
@@ -27,11 +30,12 @@ func init() {
 	scanCmd.Flags().IntVar(&scanConcurrency, "concurrency", 3, "number of concurrent browser contexts")
 }
 
-func runScan(cmd *cobra.Command, _ []string) error {
+func runScan(cmd *cobra.Command, _ []string) (err error) {
 	ctx := cmd.Context()
+	dbPath := viper.GetString("db")
 
 	portalsPath := "portals.yml"
-	if _, err := os.Stat(portalsPath); err != nil {
+	if _, statErr := os.Stat(portalsPath); statErr != nil {
 		return oops.Errorf("portals.yml not found -- run onboarding first or copy templates/portals.example.yml")
 	}
 
@@ -39,6 +43,17 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return oops.Wrapf(err, "loading portals config")
 	}
+
+	g := closer.Guard{Err: &err}
+
+	database, err := db.OpenAndMigrate(ctx, dbPath)
+	if err != nil {
+		return err
+	}
+	defer g.Close(database)
+
+	r := db.NewSQLite(database)
+	defer g.Close(r)
 
 	stderrf("Scanning %d portal(s) with concurrency=%d...\n", len(portals), scanConcurrency)
 
@@ -59,13 +74,8 @@ func runScan(cmd *cobra.Command, _ []string) error {
 		})
 	}
 
-	// Load scan history for dedup.
-	history := loadScanHistory(filepath.Join("data", "scan-history.tsv"))
-
-	newResults := lo.Filter(results, func(r scanner.ScanResult, _ int) bool {
-		_, seen := history[strings.ToLower(r.URL)]
-		return !seen
-	})
+	// Dedup against scan history in SQLite.
+	newResults := filterNewResults(ctx, r, results)
 
 	stderrf("\nTotal found: %d | After filter: %d | New: %d\n",
 		len(results), len(results), len(newResults))
@@ -86,6 +96,19 @@ func runScan(cmd *cobra.Command, _ []string) error {
 	})
 
 	return mw.err
+}
+
+// filterNewResults returns only results not already in scan history.
+func filterNewResults(
+	ctx context.Context, r db.Repository, results []scanner.ScanResult,
+) []scanner.ScanResult {
+	return lo.Filter(results, func(sr scanner.ScanResult, _ int) bool {
+		scanned, err := r.HasBeenScanned(ctx, strings.ToLower(sr.URL), sr.Portal)
+		if err != nil {
+			return true // on error, include the result
+		}
+		return !scanned
+	})
 }
 
 // matchesTitleFilter returns true if the title matches the positive/negative keyword rules.
@@ -113,25 +136,4 @@ func stderrf(format string, args ...any) {
 		// Stderr write failure is non-recoverable; nothing to do.
 		return
 	}
-}
-
-// loadScanHistory reads the scan-history.tsv and returns a set of known URLs.
-func loadScanHistory(path string) map[string]struct{} {
-	data, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return make(map[string]struct{})
-	}
-
-	lines := strings.Split(string(data), "\n")
-	urls := lo.FilterMap(lines, func(line string, _ int) (string, bool) {
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) < 1 || strings.TrimSpace(parts[0]) == "" {
-			return "", false
-		}
-		return strings.ToLower(strings.TrimSpace(parts[0])), true
-	})
-
-	return lo.SliceToMap(urls, func(url string) (string, struct{}) {
-		return url, struct{}{}
-	})
 }

@@ -13,12 +13,18 @@ mise exec -- task install            # Install to $GOPATH/bin
 
 # Pipeline integrity
 career-ops verify       # Health check (statuses, dupes, links)
-career-ops merge        # Merge batch TSV additions into applications.md
+career-ops merge        # Merge batch TSV additions into DB
 career-ops dedup        # Remove duplicate entries
 career-ops normalize    # Map aliases to canonical statuses
 career-ops sync-check   # Validate setup consistency
 
-# Data migration
+# Profile management
+career-ops profile show              # Display user profile
+career-ops profile set <field> <val> # Update a profile field
+career-ops profile enrichments       # List pending enrichments
+career-ops profile apply <id>        # Apply a pending enrichment
+
+# Data migration (legacy)
 career-ops import                                         # Import markdown data into SQLite
 career-ops export [--format applications|pipeline|scan-history] [--output file]  # Export SQLite to markdown
 
@@ -31,7 +37,7 @@ career-ops batch        # (not yet implemented)
 # Dashboard TUI
 career-ops dashboard [--path .]
 
-# MCP server
+# MCP server (includes profile tools)
 career-ops mcp          # Start MCP server (stdio transport)
 
 # Development
@@ -57,26 +63,70 @@ AI-powered job search automation built on Claude Code: pipeline tracking, offer 
 
 | File | Function |
 |------|----------|
-| `data/applications.md` | Application tracker |
-| `data/pipeline.md` | Inbox of pending URLs |
-| `data/scan-history.tsv` | Scanner dedup history |
-| `portals.yml` | Query and company config |
+| `career-ops.db` | **SQLite database — single source of truth** for applications, pipeline, scan history, profile, enrichments, submissions |
+| `portals.yml` | Query and company config for scanner |
 | `templates/cv-template.html` | HTML template for CVs |
+| `cv.md` | Canonical CV (content, not data) |
 | `article-digest.md` | Compact proof points from portfolio (optional) |
 | `interview-prep/story-bank.md` | Accumulated STAR+R stories across evaluations |
 | `reports/` | Evaluation reports (format: `{###}-{company-slug}-{YYYY-MM-DD}.md`) |
 | `internal/db/` | SQLite database layer (entity files, migrations, validation) |
 | `internal/repo/` | Repository interface + SQLite implementation |
-| `internal/mcp/` | MCP server (tools + resources) |
+| `internal/mcp/` | MCP server (tools + resources + profile tools) |
+| `internal/jobboard/` | **Unified job board abstraction** — Board interface (search + apply), Registry, rate limiter |
+| `internal/jobboard/boards/` | **100 board implementations** — ATS, aggregators, startup, remote/AI, freelance/intl |
+| `internal/scanner/` | Portal scanner + legacy board adapters |
+| `internal/applicator/` | High-throughput application submission pipeline |
 | `internal/worker/` | Generic worker pool, fan-out, batch processing |
 | `internal/closer/` | Deferred close error handling |
+| `internal/ui/screens/` | TUI screens — pipeline table, kanban board, profile view, file viewer |
+
+### Data Architecture
+
+**SQLite is the single source of truth.** All application tracking, pipeline management, scan history, user profile, and enrichment data lives in `career-ops.db`. The legacy markdown files (`data/applications.md`, `data/pipeline.md`, `data/scan-history.tsv`) are no longer read at runtime — use `career-ops import` to migrate existing data and `career-ops export` to generate markdown snapshots.
+
+### Job Board Architecture
+
+The `internal/jobboard/` package provides a unified `Board` interface for both job discovery and application submission:
+
+```go
+type Board interface {
+    Meta() BoardMeta          // static info: name, slug, category, capabilities
+    Search(ctx, query) ([]SearchResult, error)  // discover jobs
+    Apply(ctx, app) (ApplyResult, error)        // submit application
+    HealthCheck(ctx) error                       // verify reachable
+}
+```
+
+**Registry** holds all 100 boards, supports lookup by slug/category/capability, and `SearchAll()` fans out queries in parallel via errgroup.
+
+**Board categories:** ATS (20), Aggregator (20), Startup (20), Remote/AI/Niche (20), Freelance/International (20).
+
+**Capabilities:** `search`, `apply`, `api` (structured API), `scrape` (chromedp required).
+
+```go
+reg := jobboard.NewRegistry()
+boards.RegisterAll(reg)                    // registers all 100 boards
+results, _ := reg.SearchAll(ctx, query)    // parallel fan-out search
+```
+
+### TUI Dashboard Views
+
+The dashboard (`career-ops dashboard`) has multiple view modes:
+
+| View | File | Description |
+|------|------|-------------|
+| Pipeline (table) | `screens/pipeline.go` | Table view with tabs, sorting, filtering |
+| Kanban (cards) | `screens/kanban.go` | Card-based kanban board grouped by status |
+| Profile | `screens/profile.go` | User profile with collapsible sections |
+| File viewer | `screens/viewer.go` | Report/file viewer with syntax highlighting |
 
 ### First Run — Onboarding (IMPORTANT)
 
 **Before doing ANYTHING else, check if the system is set up.** Run these checks silently every time a session starts:
 
 1. Does `cv.md` exist?
-2. Does `config/profile.yml` exist (not just profile.example.yml)?
+2. Does the user profile exist in the DB? (run `career-ops profile show` — if all fields are empty, profile needs setup)
 3. Does `portals.yml` exist (not just templates/portals.example.yml)?
 
 **If ANY of these is missing, enter onboarding mode.** Do NOT proceed with evaluations, scans, or any other mode until the basics are in place. Guide the user step by step:
@@ -93,7 +143,7 @@ If `cv.md` is missing, ask:
 Create `cv.md` from whatever they provide. Make it clean markdown with standard sections (Summary, Experience, Projects, Education, Skills).
 
 #### Step 2: Profile (required)
-If `config/profile.yml` is missing, copy from `config/profile.example.yml` and then ask:
+If the DB profile is empty (all fields blank), ask:
 > "I need a few details to personalize the system:
 > - Your full name and email
 > - Your location and timezone
@@ -102,7 +152,7 @@ If `config/profile.yml` is missing, copy from `config/profile.example.yml` and t
 >
 > I'll set everything up for you."
 
-Fill in `config/profile.yml` with their answers. For archetypes, map their target roles to the closest matches and update `modes/_shared.md` if needed.
+Save their answers to the DB via `career-ops profile set <field> <value>` or the MCP `profile_update` tool. For archetypes, map their target roles to the closest matches and update `modes/_shared.md` if needed.
 
 #### Step 3: Portals (recommended)
 If `portals.yml` is missing:
@@ -110,14 +160,8 @@ If `portals.yml` is missing:
 
 Copy `templates/portals.example.yml` → `portals.yml`. If they gave target roles in Step 2, update `title_filter.positive` to match.
 
-#### Step 4: Tracker
-If `data/applications.md` doesn't exist, create it:
-```markdown
-# Applications Tracker
-
-| # | Date | Company | Role | Score | Status | PDF | Report | Notes |
-|---|------|---------|------|-------|--------|-----|--------|-------|
-```
+#### Step 4: Database
+The SQLite database is auto-created and migrated on first use — no manual setup needed. All application tracking, pipeline, scan history, and profile data is stored in `career-ops.db`.
 
 #### Step 5: Get to Know the User
 Once the basics are in place, proactively learn about the user to personalize evaluations and CV generation:
@@ -128,7 +172,7 @@ Once the basics are in place, proactively learn about the user to personalize ev
 > 3. **Deal-breakers:** Anything that's an automatic no? (e.g., mandatory relocation, specific technologies you refuse to work with, minimum comp, visa requirements)
 > 4. **Key accomplishments:** What are 2-3 achievements you're most proud of? These become your go-to proof points in applications."
 
-Store their answers in `config/profile.yml` under the relevant sections (preferences, deal_breakers, proof_points). Use this context in every evaluation and CV generation going forward.
+Store their answers in the DB via `career-ops profile set` or MCP `profile_update` / `profile_enrich` tools. Use this context in every evaluation and CV generation going forward.
 
 #### Step 6: Ready
 Once all files exist, confirm:
@@ -154,7 +198,7 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 - "Change the archetypes to [backend/frontend/data/devops] roles" → edit `modes/_shared.md`
 - "Translate the modes to English" → edit all files in `modes/`
 - "Add these companies to my portals" → edit `portals.yml`
-- "Update my profile" → edit `config/profile.yml`
+- "Update my profile" → `career-ops profile set <field> <value>` or MCP `profile_update`
 - "Change the CV template design" → edit `templates/cv-template.html`
 - "Adjust the scoring weights" → edit `modes/_shared.md` and `batch/batch-prompt.md`
 
@@ -163,9 +207,9 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 | If the user... | Mode |
 |----------------|------|
 | Pastes JD or URL | auto-pipeline (evaluate + report + PDF + tracker) |
-| Asks to evaluate offer | `oferta` |
-| Asks to compare offers | `ofertas` |
-| Wants LinkedIn outreach | `contacto` |
+| Asks to evaluate offer | `evaluate` |
+| Asks to compare offers | `compare` |
+| Wants LinkedIn outreach | `outreach` |
 | Asks for company research | `deep` |
 | Wants to generate CV/PDF | `pdf` |
 | Evaluates a course/cert | `training` |
@@ -175,6 +219,8 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 | Searches for new offers | `scan` |
 | Processes pending URLs | `pipeline` |
 | Batch processes offers | `batch` |
+| Manages their profile | `career-ops profile` CLI |
+| Wants profile enrichment | MCP `profile_enrich` tool |
 
 ### CV Source of Truth
 
@@ -206,7 +252,8 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 
 ## Stack and Conventions
 
-- Go (cobra CLI, chromedp for PDF, bubbletea for TUI, **SQLite via modernc.org/sqlite**), YAML (config), HTML/CSS (template), Markdown (data)
+- Go (cobra CLI, chromedp for browser automation, bubbletea for TUI, **SQLite via modernc.org/sqlite**), YAML (config), HTML/CSS (template)
+- **SQLite** is the single source of truth — all data stored in `career-ops.db`
 - **ksql** (vingarcia/ksql) for entity CRUD, raw SQL for FTS5/aggregation
 - **goose** (pressly/goose/v3) for migrations in `internal/db/migrations/`
 - **samber/lo** for all collection operations (Map, Filter, GroupBy, ForEach, etc.) — NEVER manual for loops
@@ -215,11 +262,11 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 - **mcp-go** (mark3labs/mcp-go v0.47) for MCP server
 - CLI source in `cmd/career-ops/`, library code in `internal/`
 - Output in `output/` (gitignored), Reports in `reports/`
-- JDs in `jds/` (referenced as `local:jds/{file}` in pipeline.md)
+- JDs in `jds/` (referenced as `local:jds/{file}`)
 - Batch in `batch/` (gitignored except scripts and prompt)
 - Report numbering: sequential 3-digit zero-padded, max existing + 1
 - **RULE: After each batch of evaluations, run `career-ops merge`** to merge tracker additions and avoid duplications.
-- **RULE: NEVER create new entries in applications.md if company+role already exists.** Update the existing entry.
+- **RULE: NEVER create duplicate entries in DB if company+role already exists.** Use `repo.UpsertApplication` to update.
 
 ### Go Conventions
 
@@ -227,7 +274,7 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 - **Errors**: Use `samber/oops` for ALL error wrapping. Never use `fmt.Errorf`.
 - **Monads**: Use `samber/mo` (Result, Option) for worker pool returns.
 - **Validation**: Manual validation with `validationError` collector in `internal/db/validation.go`.
-- **Entity pattern**: Each entity (Application, PipelineEntry, ScanRecord, Evaluation) gets its own file in `internal/db/` with model struct, ksql table definition, and CRUD methods.
+- **Entity pattern**: Each entity (Application, PipelineEntry, ScanRecord, Evaluation, UserProfile, ProfileEnrichment, Submission) gets its own file in `internal/db/` with model struct, ksql table definition, and CRUD methods.
 - **Migrations**: Each migration in its own `.sql` file under `internal/db/migrations/` with goose up/down annotations.
 - **Lint**: Zero tolerance -- no `//nolint` directives, no `.golangci.yml` exclusion rules. Fix the actual code.
 - **Task runner**: Always use `mise exec -- task` prefix (never bare `task`).
@@ -255,21 +302,50 @@ Write one TSV file per evaluation to `batch/tracker-additions/{num}-{company-slu
 
 ### Pipeline Integrity
 
-1. **NEVER edit applications.md to ADD new entries** -- Write TSV in `batch/tracker-additions/` and `career-ops merge` handles the merge.
-2. **YES you can edit applications.md to UPDATE status/notes of existing entries.**
+1. **New entries**: Write TSV in `batch/tracker-additions/` and `career-ops merge` upserts into DB.
+2. **Status updates**: Use `repo.UpsertApplication` or MCP `update_status` tool.
 3. All reports MUST include `**URL:**` in the header (between Score and PDF).
 4. All statuses MUST be canonical (see `templates/states.yml`).
 5. Health check: `career-ops verify`
 6. Normalize statuses: `career-ops normalize`
 7. Dedup: `career-ops dedup`
-8. Import markdown into SQLite: `career-ops import`
-9. Export SQLite back to markdown: `career-ops export`
+8. Import legacy markdown into SQLite: `career-ops import`
+9. Export SQLite to markdown: `career-ops export`
 
 ### Batch Processing -- Headless Fallback
 
 > When running in headless mode (`claude -p`), chromedp may not be available. Use WebFetch as a fallback for JD extraction, but flag the result as "unconfirmed" since WebFetch may not render JavaScript-heavy pages.
 
-### Canonical States (applications.md)
+### MCP Tools
+
+The MCP server exposes these tools for AI-driven operations:
+
+| Tool | Purpose |
+|------|---------|
+| `list_applications` | List tracked applications with optional filters |
+| `search_applications` | Free-text search across applications |
+| `add_to_pipeline` | Add a URL to the processing pipeline |
+| `update_status` | Update an application's status |
+| `get_metrics` | Pipeline statistics and metrics |
+| `evaluate_offer` | Trigger offer evaluation |
+| `profile_get` | Read the user's career profile |
+| `profile_update` | Update a single profile field |
+| `profile_enrich` | Record an enrichment from external source |
+| `profile_enrichments` | List pending enrichments |
+| `profile_apply_enrichment` | Apply a pending enrichment |
+
+### Profile Enrichment
+
+The AI can continuously improve the user profile from multiple sources:
+- **Conversations**: Extract preferences, skills, deal-breakers from chat
+- **GitHub**: Analyze repos for tech stack, contributions, proof points
+- **LinkedIn**: Extract experience, endorsements, connections
+- **Blog/Articles**: Mine portfolio content for proof points
+- **Job applications**: Learn from feedback and interview outcomes
+
+Use MCP `profile_enrich` tool to record enrichments, then `profile_apply_enrichment` to apply them after review.
+
+### Canonical States
 
 **Source of truth:** `templates/states.yml`
 

@@ -8,16 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	_ "modernc.org/sqlite" // register sqlite driver for database/sql
-
 	"github.com/samber/lo"
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
 	"github.com/omarluq/career-ops/internal/closer"
+	"github.com/omarluq/career-ops/internal/db"
 	"github.com/omarluq/career-ops/internal/model"
-	"github.com/omarluq/career-ops/internal/repo"
 )
 
 var exportCmd = &cobra.Command{
@@ -71,13 +69,13 @@ func runExport(cmd *cobra.Command, _ []string) (err error) {
 
 	g := closer.Guard{Err: &err}
 
-	db, err := repo.OpenAndMigrate(ctx, dbPath)
+	database, err := db.OpenAndMigrate(ctx, dbPath)
 	if err != nil {
 		return err
 	}
-	defer g.Close(db)
+	defer g.Close(database)
 
-	r := repo.NewSQLite(db)
+	r := db.NewSQLite(database)
 	defer g.Close(r)
 
 	w := cmd.OutOrStdout()
@@ -104,7 +102,7 @@ func runExport(cmd *cobra.Command, _ []string) (err error) {
 
 // exportApplications writes all applications as a markdown table matching
 // the applications.md format.
-func exportApplications(ctx context.Context, r repo.Repository, w io.Writer) error {
+func exportApplications(ctx context.Context, r db.Repository, w io.Writer) error {
 	apps, err := r.ListApplications(ctx)
 	if err != nil {
 		return err
@@ -150,7 +148,7 @@ func exportApplications(ctx context.Context, r repo.Repository, w io.Writer) err
 }
 
 // exportPipeline writes all pipeline entries as a markdown list.
-func exportPipeline(ctx context.Context, r repo.Repository, w io.Writer) error {
+func exportPipeline(ctx context.Context, r db.Repository, w io.Writer) error {
 	entries, err := r.ListPipeline(ctx, "")
 	if err != nil {
 		return err
@@ -160,7 +158,7 @@ func exportPipeline(ctx context.Context, r repo.Repository, w io.Writer) error {
 	mw.writeln("# Pipeline")
 	mw.writeln("")
 
-	lo.ForEach(entries, func(e repo.PipelineEntry, _ int) {
+	lo.ForEach(entries, func(e db.RepoPipelineEntry, _ int) {
 		line := fmt.Sprintf("- %s", e.URL)
 		if e.Source != "" {
 			line += fmt.Sprintf(" (source: %s)", e.Source)
@@ -175,7 +173,7 @@ func exportPipeline(ctx context.Context, r repo.Repository, w io.Writer) error {
 }
 
 // exportScanHistory writes all scan records as a TSV matching scan-history.tsv format.
-func exportScanHistory(ctx context.Context, r repo.Repository, w io.Writer) error {
+func exportScanHistory(ctx context.Context, r db.Repository, w io.Writer) error {
 	records, err := r.ListScanHistory(ctx)
 	if err != nil {
 		return err
@@ -184,7 +182,7 @@ func exportScanHistory(ctx context.Context, r repo.Repository, w io.Writer) erro
 	mw := &mdWriter{w: w}
 	mw.writeln("url\tportal\tdate\ttitle\tcompany")
 
-	lo.ForEach(records, func(rec repo.ScanRecord, _ int) {
+	lo.ForEach(records, func(rec db.RepoScanRecord, _ int) {
 		mw.writef("%s\t%s\t%s\t%s\t%s\n",
 			rec.URL,
 			rec.Portal,

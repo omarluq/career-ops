@@ -116,6 +116,92 @@ func (s *Scanner) ScanPortals(
 	return all, nil
 }
 
+// ScanBoards scans all provided board adapters concurrently.
+// Returns discovered job listings deduplicated by URL.
+func (s *Scanner) ScanBoards(
+	ctx context.Context,
+	boards []BoardAdapter,
+	config BoardConfig,
+	onProgress func(board string, found int),
+) ([]ScanResult, error) {
+	// Create a shared Chrome allocator so all tabs share one browser process.
+	allocCtx, allocCancel := chromedp.NewExecAllocator(
+		ctx, chromedp.DefaultExecAllocatorOptions[:]...,
+	)
+	defer allocCancel()
+
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+	defer browserCancel()
+
+	// Warm up the browser.
+	if err := chromedp.Run(browserCtx); err != nil {
+		return nil, oops.Wrapf(err, "starting browser for board scan")
+	}
+
+	type boardResult struct {
+		board   string
+		results []ScanResult
+	}
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(s.concurrency)
+
+	ch := make(chan mo.Result[boardResult], len(boards))
+
+	lo.ForEach(boards, func(b BoardAdapter, _ int) {
+		g.Go(func() error {
+			listings, err := b.DiscoverJobs(gctx, browserCtx, config)
+			if err != nil {
+				ch <- mo.Err[boardResult](
+					oops.Wrapf(err, "scanning board %s", b.Name()),
+				)
+				return nil
+			}
+
+			if onProgress != nil {
+				onProgress(b.Name(), len(listings))
+			}
+
+			ch <- mo.Ok(boardResult{
+				board:   b.Name(),
+				results: listings,
+			})
+			return nil
+		})
+	})
+
+	// Wait for all goroutines, then close channel.
+	go func() {
+		if waitErr := g.Wait(); waitErr != nil {
+			ch <- mo.Err[boardResult](oops.Wrapf(waitErr, "board scan group"))
+		}
+		close(ch)
+	}()
+
+	var all []ScanResult
+	var errs []error
+
+	for r := range ch {
+		val, err := r.Get()
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		all = append(all, val.results...)
+	}
+
+	// Deduplicate by URL.
+	all = lo.UniqBy(all, func(r ScanResult) string {
+		return strings.ToLower(r.URL)
+	})
+
+	if len(errs) > 0 {
+		return all, oops.Wrapf(errs[0], "encountered %d board errors", len(errs))
+	}
+
+	return all, nil
+}
+
 // scanSinglePortal scans one portal config, which may have a direct URL and/or queries.
 func (s *Scanner) scanSinglePortal(
 	browserCtx, gctx context.Context,

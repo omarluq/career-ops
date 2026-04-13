@@ -8,15 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	_ "modernc.org/sqlite" // register sqlite driver for database/sql
-
 	"github.com/samber/lo"
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
 	"github.com/omarluq/career-ops/internal/closer"
-	"github.com/omarluq/career-ops/internal/repo"
+	"github.com/omarluq/career-ops/internal/db"
 	"github.com/omarluq/career-ops/internal/tracker"
 )
 
@@ -38,13 +36,13 @@ func runImport(cmd *cobra.Command, _ []string) (err error) {
 
 	g := closer.Guard{Err: &err}
 
-	db, err := repo.OpenAndMigrate(ctx, dbPath)
+	database, err := db.OpenAndMigrate(ctx, dbPath)
 	if err != nil {
 		return err
 	}
-	defer g.Close(db)
+	defer g.Close(database)
 
-	r := repo.NewSQLite(db)
+	r := db.NewSQLite(database)
 	defer g.Close(r)
 
 	appCount, err := importApplications(ctx, r, basePath)
@@ -72,7 +70,7 @@ func runImport(cmd *cobra.Command, _ []string) (err error) {
 
 // importApplications parses applications.md and upserts every entry.
 func importApplications(
-	ctx context.Context, r repo.Repository, basePath string,
+	ctx context.Context, r db.Repository, basePath string,
 ) (int, error) {
 	apps, err := tracker.ParseApplications(basePath)
 	if err != nil {
@@ -89,7 +87,7 @@ func importApplications(
 
 // importPipeline reads pipeline.md and adds each URL to the pipeline table.
 func importPipeline(
-	ctx context.Context, r repo.Repository, basePath string,
+	ctx context.Context, r db.Repository, basePath string,
 ) (count int, err error) {
 	g := closer.Guard{Err: &err}
 	pipePath := filepath.Join(basePath, "data", "pipeline.md")
@@ -171,7 +169,7 @@ type importScanEntry struct {
 
 // importScanHistory reads scan-history.tsv and records each entry.
 func importScanHistory(
-	ctx context.Context, r repo.Repository, basePath string,
+	ctx context.Context, r db.Repository, basePath string,
 ) (int, error) {
 	data, err := readScanHistoryTSV(basePath)
 	if err != nil {

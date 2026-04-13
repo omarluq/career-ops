@@ -6,8 +6,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/samber/oops"
-
-	"github.com/omarluq/career-ops/internal/tracker"
 )
 
 // handleApplicationsResource returns all tracked applications as JSON.
@@ -15,11 +13,10 @@ func (s *Server) handleApplicationsResource(
 	ctx context.Context,
 	req mcp.ReadResourceRequest,
 ) ([]mcp.ResourceContents, error) {
-	_ = ctx
 	_ = req
-	apps, err := tracker.ParseApplications(s.careerOpsPath)
+	apps, err := s.repo.ListApplications(ctx)
 	if err != nil {
-		return nil, oops.Wrapf(err, "parsing applications")
+		return nil, oops.Wrapf(err, "listing applications")
 	}
 
 	data, err := json.MarshalIndent(apps, "", "  ")
@@ -41,14 +38,11 @@ func (s *Server) handleMetricsResource(
 	ctx context.Context,
 	req mcp.ReadResourceRequest,
 ) ([]mcp.ResourceContents, error) {
-	_ = ctx
 	_ = req
-	apps, err := tracker.ParseApplications(s.careerOpsPath)
+	metrics, err := s.repo.ComputeMetrics(ctx)
 	if err != nil {
-		return nil, oops.Wrapf(err, "parsing applications")
+		return nil, oops.Wrapf(err, "computing metrics")
 	}
-
-	metrics := tracker.ComputeMetrics(apps)
 
 	data, err := json.MarshalIndent(metrics, "", "  ")
 	if err != nil {

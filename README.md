@@ -26,6 +26,9 @@ The original career-ops runs on Node.js with 6 separate `.mjs` scripts and Playw
 | Node.js runtime required | Zero runtime dependencies |
 | Markdown tables for data | SQLite database (modernc.org/sqlite, pure Go) |
 | No MCP support | MCP server (stdio transport) for AI agent integration |
+| Manual application submission | **Applicator** (ATS-aware form filling with rate limiting) |
+| Limited board coverage | **100 board implementations** (ATS, aggregators, startup, remote/AI) |
+| No profile management | **User profile** with enrichment tracking |
 
 Everything else -- modes, templates, scoring, portals, batch processing -- remains identical to upstream.
 
@@ -39,11 +42,14 @@ Everything else -- modes, templates, scoring, portals, batch processing -- remai
 | **Negotiation Scripts** | Salary negotiation frameworks, geographic discount pushback, competing offer leverage |
 | **ATS PDF Generation** | Keyword-injected CVs via chromedp with Space Grotesk + DM Sans design |
 | **Portal Scanner** | 45+ companies pre-configured across Ashby, Greenhouse, Lever, Wellfound |
+| **100 Job Boards** | Unified `Board` interface across ATS, aggregators, startup, remote/AI, freelance portals |
+| **Applicator** | High-throughput application submission with per-portal rate limiting and ATS-specific form handlers |
 | **Batch Processing** | Parallel evaluation with `claude -p` workers |
-| **Dashboard TUI** | Bubble Tea terminal UI to browse, filter, and sort your pipeline |
+| **Dashboard TUI** | Bubble Tea terminal UI with pipeline table, kanban board, and profile views |
+| **Profile Management** | User profile with enrichment tracking from conversations, GitHub, LinkedIn |
 | **Pipeline Integrity** | Automated merge, dedup, status normalization, health checks |
-| **SQLite Storage** | Application data, pipeline, scan history stored in SQLite with FTS5 search |
-| **MCP Server** | Model Context Protocol server for AI agent tool integration |
+| **SQLite Storage** | Application data, pipeline, scan history, profile stored in SQLite with FTS5 search |
+| **MCP Server** | Model Context Protocol server for AI agent tool integration (12 tools + 2 resources) |
 | **Import/Export** | Bidirectional migration between markdown and SQLite formats |
 
 ## Quick Start
@@ -130,7 +136,7 @@ Career-ops is driven by Claude Code with skill modes:
 /career-ops tracker          View application status
 /career-ops apply            Fill application forms with AI
 /career-ops pipeline         Process pending URLs
-/career-ops contacto         LinkedIn outreach message
+/career-ops outreach         LinkedIn outreach message
 /career-ops deep             Deep company research
 /career-ops training         Evaluate a course/cert
 /career-ops project          Evaluate a portfolio project
@@ -212,7 +218,7 @@ career-ops/
 │   └── worker/                 # Generic worker pool + fan-out
 ├── modes/                      # 14 Claude skill modes
 │   ├── _shared.md
-│   ├── oferta.md
+│   ├── evaluate.md
 │   ├── pdf.md
 │   ├── scan.md
 │   ├── batch.md

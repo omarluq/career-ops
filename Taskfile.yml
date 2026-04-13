@@ -108,6 +108,12 @@ tasks:
       - task: test
       - task: build
 
+  spec:
+    desc: Run tests (alias)
+    aliases: [specs]
+    cmds:
+      - task: test
+
   # Pipeline Commands
   verify:
     desc: Run pipeline health check (statuses, dupes, links)

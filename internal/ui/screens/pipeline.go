@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/samber/lo"
@@ -15,6 +17,69 @@ import (
 	"github.com/omarluq/career-ops/internal/states"
 	"github.com/omarluq/career-ops/internal/ui/theme"
 )
+
+// pipelineKeyMap defines key bindings for the pipeline screen.
+type pipelineKeyMap struct {
+	Nav     *key.Binding
+	Tabs    *key.Binding
+	Sort    *key.Binding
+	Report  *key.Binding
+	OpenURL *key.Binding
+	Change  *key.Binding
+	View    *key.Binding
+	Kanban  *key.Binding
+	Profile *key.Binding
+	Quit    *key.Binding
+}
+
+func newPipelineKeyMap() pipelineKeyMap {
+	return pipelineKeyMap{
+		Nav:     lo.ToPtr(key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "nav"))),
+		Tabs:    lo.ToPtr(key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←→", "tabs"))),
+		Sort:    lo.ToPtr(key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort"))),
+		Report:  lo.ToPtr(key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "report"))),
+		OpenURL: lo.ToPtr(key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open URL"))),
+		Change:  lo.ToPtr(key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "change"))),
+		View:    lo.ToPtr(key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "view"))),
+		Kanban:  lo.ToPtr(key.NewBinding(key.WithKeys("k"), key.WithHelp("k", "kanban"))),
+		Profile: lo.ToPtr(key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "profile"))),
+		Quit:    lo.ToPtr(key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "quit"))),
+	}
+}
+
+// pipelineStatusPickerKeyMap is shown when the status picker is active.
+type pipelineStatusPickerKeyMap struct {
+	Nav     *key.Binding
+	Confirm *key.Binding
+	Cancel  *key.Binding
+}
+
+func newPipelineStatusPickerKeyMap() pipelineStatusPickerKeyMap {
+	return pipelineStatusPickerKeyMap{
+		Nav:     lo.ToPtr(key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "navigate"))),
+		Confirm: lo.ToPtr(key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "confirm"))),
+		Cancel:  lo.ToPtr(key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "cancel"))),
+	}
+}
+
+func (k pipelineKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{
+		*k.Nav, *k.Tabs, *k.Sort, *k.Report, *k.OpenURL,
+		*k.Change, *k.View, *k.Kanban, *k.Profile, *k.Quit,
+	}
+}
+
+func (k pipelineKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{k.ShortHelp()}
+}
+
+func (k pipelineStatusPickerKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{*k.Nav, *k.Confirm, *k.Cancel}
+}
+
+func (k pipelineStatusPickerKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{k.ShortHelp()}
+}
 
 // PipelineClosedMsg is emitted when the pipeline screen is dismissed.
 type PipelineClosedMsg struct{}
@@ -105,21 +170,24 @@ var statusGroupOrder = []string{
 
 // PipelineModel implements the career pipeline dashboard screen.
 type PipelineModel struct {
-	reportCache   map[string]reportSummary
-	theme         theme.Theme
-	careerOpsPath string
-	sortMode      string
-	viewMode      string
-	filtered      []model.CareerApplication
-	apps          []model.CareerApplication
-	metrics       model.PipelineMetrics
-	activeTab     int
-	height        int
-	width         int
-	scrollOffset  int
-	cursor        int
-	statusCursor  int
-	statusPicker  bool
+	help             help.Model
+	reportCache      map[string]reportSummary
+	theme            theme.Theme
+	viewMode         string
+	sortMode         string
+	careerOpsPath    string
+	keys             pipelineKeyMap
+	statusPickerKeys pipelineStatusPickerKeyMap
+	filtered         []model.CareerApplication
+	apps             []model.CareerApplication
+	metrics          model.PipelineMetrics
+	activeTab        int
+	height           int
+	width            int
+	scrollOffset     int
+	cursor           int
+	statusCursor     int
+	statusPicker     bool
 }
 
 // NewPipelineModel creates a new pipeline screen.
@@ -130,24 +198,32 @@ func NewPipelineModel(
 	careerOpsPath string,
 	width, height int,
 ) PipelineModel {
+	h := help.New()
+	h.Styles.ShortKey = lipgloss.NewStyle().Bold(true).Foreground(t.Text)
+	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(t.Subtext)
+	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(t.Subtext)
+
 	m := PipelineModel{
-		apps:          apps,
-		metrics:       metrics,
-		sortMode:      sortScore,
-		activeTab:     0,
-		viewMode:      viewGrouped,
-		width:         width,
-		height:        height,
-		theme:         *t,
-		careerOpsPath: careerOpsPath,
-		reportCache:   make(map[string]reportSummary),
+		apps:             apps,
+		metrics:          metrics,
+		sortMode:         sortScore,
+		activeTab:        0,
+		viewMode:         viewGrouped,
+		width:            width,
+		height:           height,
+		theme:            *t,
+		careerOpsPath:    careerOpsPath,
+		reportCache:      make(map[string]reportSummary),
+		help:             h,
+		keys:             newPipelineKeyMap(),
+		statusPickerKeys: newPipelineStatusPickerKeyMap(),
 	}
 	m.applyFilterAndSort()
 	return m
 }
 
 // Init implements tea.Model.
-func (m PipelineModel) Init() tea.Cmd {
+func (m *PipelineModel) Init() tea.Cmd {
 	return nil
 }
 
@@ -189,7 +265,7 @@ func (m *PipelineModel) CurrentApp() (model.CareerApplication, bool) {
 }
 
 // Update handles input for the pipeline screen.
-func (m PipelineModel) Update(msg tea.Msg) (PipelineModel, tea.Cmd) {
+func (m *PipelineModel) Update(msg tea.Msg) (PipelineModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if m.statusPicker {
@@ -199,16 +275,16 @@ func (m PipelineModel) Update(msg tea.Msg) (PipelineModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
+		return *m, nil
 	}
-	return m, nil
+	return *m, nil
 }
 
 // handleKey dispatches key messages to specialized handlers.
-func (m PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
+func (m *PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
-		return m, func() tea.Msg { return PipelineClosedMsg{} }
+		return *m, func() tea.Msg { return PipelineClosedMsg{} }
 	case pipelineKeyDown, pipelineKeyUp, "pgdown", "ctrl+d", "pgup", "ctrl+u":
 		return m.handleNavKeys(msg)
 	case "s", "f", "right", "left":
@@ -216,11 +292,11 @@ func (m PipelineModel) handleKey(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 	case "v", pipelineKeyEnter, "o", "c":
 		return m.handleActionKeys(msg)
 	}
-	return m, nil
+	return *m, nil
 }
 
 // handleNavKeys handles cursor movement and scrolling keys.
-func (m PipelineModel) handleNavKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
+func (m *PipelineModel) handleNavKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 	switch msg.String() {
 	case pipelineKeyDown:
 		if len(m.filtered) > 0 {
@@ -230,7 +306,7 @@ func (m PipelineModel) handleNavKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 			}
 			m.adjustScroll()
 			cmd := m.loadCurrentReport()
-			return m, cmd
+			return *m, cmd
 		}
 
 	case pipelineKeyUp:
@@ -241,26 +317,26 @@ func (m PipelineModel) handleNavKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 			}
 			m.adjustScroll()
 			cmd := m.loadCurrentReport()
-			return m, cmd
+			return *m, cmd
 		}
 
 	case "pgdown", "ctrl+d":
 		m.scrollOffset += m.height / 2
-		return m, nil
+		return *m, nil
 
 	case "pgup", "ctrl+u":
 		m.scrollOffset -= m.height / 2
 		if m.scrollOffset < 0 {
 			m.scrollOffset = 0
 		}
-		return m, nil
+		return *m, nil
 	}
 
-	return m, nil
+	return *m, nil
 }
 
 // handleFilterKeys handles sort, filter, and tab switching keys.
-func (m PipelineModel) handleFilterKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
+func (m *PipelineModel) handleFilterKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 	switch msg.String() {
 	case "s":
 		_, idx, _ := lo.FindIndexOf(sortCycle, func(s string) bool {
@@ -290,11 +366,11 @@ func (m PipelineModel) handleFilterKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd)
 		m.scrollOffset = 0
 	}
 
-	return m, nil
+	return *m, nil
 }
 
 // handleActionKeys handles view toggle, report open, URL open, and status change keys.
-func (m PipelineModel) handleActionKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
+func (m *PipelineModel) handleActionKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 	switch msg.String() {
 	case "v":
 		m.toggleViewMode()
@@ -308,7 +384,7 @@ func (m PipelineModel) handleActionKeys(msg tea.KeyMsg) (PipelineModel, tea.Cmd)
 			m.statusCursor = 0
 		}
 	}
-	return m, nil
+	return *m, nil
 }
 
 func (m *PipelineModel) toggleViewMode() {
@@ -319,32 +395,32 @@ func (m *PipelineModel) toggleViewMode() {
 	}
 }
 
-func (m PipelineModel) openReport() (PipelineModel, tea.Cmd) {
+func (m *PipelineModel) openReport() (PipelineModel, tea.Cmd) {
 	if app, ok := m.CurrentApp(); ok && app.ReportPath != "" {
 		fullPath := filepath.Join(m.careerOpsPath, app.ReportPath)
 		title := fmt.Sprintf("%s \u2014 %s", app.Company, app.Role)
 		jobURL := app.JobURL
-		return m, func() tea.Msg {
+		return *m, func() tea.Msg {
 			return PipelineOpenReportMsg{Path: fullPath, Title: title, JobURL: jobURL}
 		}
 	}
-	return m, nil
+	return *m, nil
 }
 
-func (m PipelineModel) openJobURL() (PipelineModel, tea.Cmd) {
+func (m *PipelineModel) openJobURL() (PipelineModel, tea.Cmd) {
 	if app, ok := m.CurrentApp(); ok && app.JobURL != "" {
-		return m, func() tea.Msg {
+		return *m, func() tea.Msg {
 			return PipelineOpenURLMsg{URL: app.JobURL}
 		}
 	}
-	return m, nil
+	return *m, nil
 }
 
-func (m PipelineModel) handleStatusPicker(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
+func (m *PipelineModel) handleStatusPicker(msg tea.KeyMsg) (PipelineModel, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q":
 		m.statusPicker = false
-		return m, nil
+		return *m, nil
 
 	case pipelineKeyDown:
 		m.statusCursor++
@@ -362,7 +438,7 @@ func (m PipelineModel) handleStatusPicker(msg tea.KeyMsg) (PipelineModel, tea.Cm
 		m.statusPicker = false
 		if app, ok := m.CurrentApp(); ok {
 			newStatus := statusOptions[m.statusCursor]
-			return m, func() tea.Msg {
+			return *m, func() tea.Msg {
 				return PipelineUpdateStatusMsg{
 					CareerOpsPath: m.careerOpsPath,
 					App:           app,
@@ -371,7 +447,7 @@ func (m PipelineModel) handleStatusPicker(msg tea.KeyMsg) (PipelineModel, tea.Cm
 			}
 		}
 	}
-	return m, nil
+	return *m, nil
 }
 
 func (m *PipelineModel) loadCurrentReport() tea.Cmd {
@@ -517,14 +593,14 @@ func (m *PipelineModel) cursorLineEstimate() int {
 // -- View --
 
 // View renders the pipeline screen.
-func (m PipelineModel) View() string {
+func (m *PipelineModel) View() string {
 	header := m.renderHeader()
 	tabs := m.renderTabs()
 	metricsBar := m.renderMetrics()
 	sortBar := m.renderSortBar()
 	body := m.renderBody()
 	preview := m.renderPreview()
-	help := m.renderHelp()
+	helpBar := m.renderHelp()
 
 	bodyLines := strings.Split(body, "\n")
 	if m.scrollOffset > 0 && m.scrollOffset < len(bodyLines) {
@@ -552,7 +628,7 @@ func (m PipelineModel) View() string {
 		sortBar,
 		body,
 		preview,
-		help,
+		helpBar,
 	)
 }
 
@@ -808,64 +884,28 @@ func (m *PipelineModel) renderPreview() string {
 }
 
 func (m *PipelineModel) renderHelp() string {
-	style := lipgloss.NewStyle().
-		Foreground(m.theme.Subtext).
+	barStyle := lipgloss.NewStyle().
 		Background(m.theme.Surface).
 		Width(m.width).
 		Padding(0, 1)
 
-	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Text)
-	descStyle := lipgloss.NewStyle().Foreground(m.theme.Subtext)
-
 	if m.statusPicker {
-		return style.Render(
-			keyStyle.Render("\u2191\u2193") + descStyle.Render(" navigate  ") +
-				keyStyle.Render("Enter") + descStyle.Render(" confirm  ") +
-				keyStyle.Render("Esc") + descStyle.Render(" cancel"))
+		return barStyle.Render(m.help.View(m.statusPickerKeys))
 	}
 
 	brand := lipgloss.NewStyle().Foreground(m.theme.Overlay).Render("career-ops")
-
-	keys := keyStyle.Render("\u2191\u2193") + descStyle.Render(" nav  ") +
-		keyStyle.Render("\u2190\u2192") + descStyle.Render(" tabs  ") +
-		keyStyle.Render("s") + descStyle.Render(" sort  ") +
-		keyStyle.Render("Enter") + descStyle.Render(" report  ") +
-		keyStyle.Render("o") + descStyle.Render(" open URL  ") +
-		keyStyle.Render("c") + descStyle.Render(" change  ") +
-		keyStyle.Render("v") + descStyle.Render(" view  ") +
-		keyStyle.Render("Esc") + descStyle.Render(" quit")
+	keys := m.help.View(m.keys)
 
 	gap := m.width - lipgloss.Width(keys) - lipgloss.Width(brand) - 2
 	if gap < 1 {
 		gap = 1
 	}
 
-	return style.Render(keys + strings.Repeat(" ", gap) + brand)
+	return barStyle.Render(keys + strings.Repeat(" ", gap) + brand)
 }
 
 func (m *PipelineModel) overlayStatusPicker(body string) string {
-	bodyLines := strings.Split(body, "\n")
-
-	pickerWidth := 30
-	padStyle := lipgloss.NewStyle().Padding(0, 2)
-	borderStyle := lipgloss.NewStyle().
-		Foreground(m.theme.Blue).
-		Bold(true)
-
-	picker := append(
-		[]string{padStyle.Render(borderStyle.Render("Change status:"))},
-		lo.Map(statusOptions, func(opt string, i int) string {
-			style := lipgloss.NewStyle().Foreground(m.theme.Text).Width(pickerWidth)
-			if i == m.statusCursor {
-				style = style.Background(m.theme.Overlay).Bold(true)
-			}
-			prefix := lo.Ternary(i == m.statusCursor, "> ", "  ")
-			return padStyle.Render(style.Render(prefix + opt))
-		})...,
-	)
-
-	bodyLines = append(bodyLines, picker...)
-	return strings.Join(bodyLines, "\n")
+	return renderStatusPicker(body, m.theme, m.statusCursor)
 }
 
 // -- Helpers --

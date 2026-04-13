@@ -47,9 +47,17 @@ func ExtractListings(ctx context.Context, pageURL string) ([]ScanResult, error) 
 func isJobURL(u string) bool {
 	patterns := []string{
 		"greenhouse.io",
+		"boards.greenhouse.io",
+		"job-boards.greenhouse.io",
 		"ashbyhq.com",
 		"lever.co",
 		"workable.com",
+		"apply.workable.com",
+		"linkedin.com/jobs",
+		"workatastartup.com",
+		"wellfound.com",
+		"ai-jobs.net",
+		"ycombinator.com",
 		"jobs.",
 		"careers",
 		"/job/",

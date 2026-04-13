@@ -89,7 +89,7 @@ func checkRequiredFiles(root string, errors *[]string) {
 			"Profile configuration (copy from config/profile.example.yml)"},
 		{"portals.yml",
 			"Portal/scanner configuration (copy from templates/portals.example.yml)"},
-		{"data/applications.md", "Application tracker"},
+		{"career-ops.db", "SQLite database (run 'career-ops import' to create)"},
 		{"templates/states.yml", "Canonical status definitions"},
 		{"templates/cv-template.html", "HTML template for CV/PDF generation"},
 	}

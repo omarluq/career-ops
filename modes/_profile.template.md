@@ -47,7 +47,7 @@
 
 <!-- Replace with YOUR story. This frames everything. -->
 
-Use the candidate's exit story from `config/profile.yml` to frame ALL content:
+Use the candidate's exit story from the DB (`career-ops profile show` → exit_story) to frame ALL content:
 - **In PDF Summaries:** Bridge from past to future
 - **In STAR stories:** Reference proof points from article-digest.md
 - **In Draft Answers:** The transition narrative appears in the first response

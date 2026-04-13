@@ -37,6 +37,8 @@ type viewState int
 
 const (
 	viewPipeline viewState = iota
+	viewKanban
+	viewProfile
 	viewReport
 )
 
@@ -46,8 +48,11 @@ const (
 type appModel struct {
 	viewer        *screens.ViewerModel
 	pipeline      *screens.PipelineModel
+	kanban        *screens.KanbanModel
+	profile       *screens.ProfileModel
 	careerOpsPath string
 	state         viewState
+	prevState     viewState // tracks which view opened the report viewer
 }
 
 func (m appModel) Init() tea.Cmd {
@@ -58,27 +63,70 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg)
+	case tea.KeyMsg:
+		return m.handleGlobalKey(msg)
+	default:
+		return m.handleScreenMsg(msg)
+	}
+}
+
+func (m *appModel) handleScreenMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
 	case screens.PipelineClosedMsg:
-		return m, tea.Quit
+		return *m, tea.Quit
+	case screens.ViewerClosedMsg:
+		m.state = m.prevState
+		return *m, nil
+	case screens.KanbanClosedMsg, screens.ProfileClosedMsg:
+		m.state = viewPipeline
+		return *m, nil
 	case screens.PipelineLoadReportMsg:
 		return m.handleLoadReport(msg)
 	case screens.PipelineUpdateStatusMsg:
 		return m.handleUpdateStatus(&msg)
 	case screens.PipelineOpenReportMsg:
 		return m.handleOpenReport(msg)
-	case screens.ViewerClosedMsg:
-		m.state = viewPipeline
-		return m, nil
 	case screens.PipelineOpenURLMsg:
-		return m, openURLCmd(msg.URL)
+		return *m, openURLCmd(msg.URL)
 	default:
 		return m.handleDefault(msg)
 	}
 }
 
+func (m *appModel) handleGlobalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Global keybinds only active on pipeline or kanban (not viewer/profile).
+	if m.state == viewPipeline || m.state == viewKanban {
+		switch {
+		// Kanban toggle: K (shift) always works; lowercase k only from pipeline
+		// (kanban uses k for card navigation).
+		case key == "K" || (key == "k" && m.state == viewPipeline):
+			if m.state == viewPipeline {
+				m.state = viewKanban
+			} else {
+				m.state = viewPipeline
+			}
+			return *m, nil
+		// Profile: P/p both work (neither screen uses p).
+		case key == "P" || key == "p":
+			m.state = viewProfile
+			return *m, nil
+		}
+	}
+	// Forward to active screen.
+	return m.handleDefault(msg)
+}
+
 func (m *appModel) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.pipeline.Resize(msg.Width, msg.Height)
-	if m.state == viewReport {
+	if m.kanban != nil {
+		m.kanban.Resize(msg.Width, msg.Height)
+	}
+	if m.profile != nil {
+		m.profile.Resize(msg.Width, msg.Height)
+	}
+	if m.state == viewReport && m.viewer != nil {
 		m.viewer.Resize(msg.Width, msg.Height)
 	}
 	pm, cmd := m.pipeline.Update(msg)
@@ -109,6 +157,7 @@ func (m *appModel) handleUpdateStatus(msg *screens.PipelineUpdateStatusMsg) (tea
 	)
 	newPM.CopyReportCache(m.pipeline)
 	m.pipeline = &newPM
+	m.kanban.RebuildColumns(apps)
 	return *m, nil
 }
 
@@ -119,19 +168,30 @@ func (m *appModel) handleOpenReport(msg screens.PipelineOpenReportMsg) (tea.Mode
 		m.pipeline.Width(), m.pipeline.Height(),
 	)
 	m.viewer = &viewer
+	m.prevState = m.state // remember where we came from
 	m.state = viewReport
 	return *m, cmd
 }
 
 func (m *appModel) handleDefault(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.state == viewReport {
+	switch m.state {
+	case viewReport:
 		vm, cmd := m.viewer.Update(msg)
 		*m.viewer = vm
 		return *m, cmd
+	case viewKanban:
+		km, cmd := m.kanban.Update(msg)
+		*m.kanban = km
+		return *m, cmd
+	case viewProfile:
+		pm, cmd := m.profile.Update(msg)
+		*m.profile = pm
+		return *m, cmd
+	default:
+		pm, cmd := m.pipeline.Update(msg)
+		*m.pipeline = pm
+		return *m, cmd
 	}
-	pm, cmd := m.pipeline.Update(msg)
-	*m.pipeline = pm
-	return *m, cmd
 }
 
 // openURLCmd returns a tea.Cmd that opens a URL in the user's default browser.
@@ -150,8 +210,21 @@ func openURLCmd(rawURL string) tea.Cmd {
 }
 
 func (m appModel) View() string {
-	if m.state == viewReport && m.viewer != nil {
-		return m.viewer.View()
+	switch m.state {
+	case viewReport:
+		if m.viewer != nil {
+			return m.viewer.View()
+		}
+	case viewKanban:
+		if m.kanban != nil {
+			return m.kanban.View()
+		}
+	case viewProfile:
+		if m.profile != nil {
+			return m.profile.View()
+		}
+	case viewPipeline:
+		// fall through to default
 	}
 	return m.pipeline.View()
 }
@@ -191,8 +264,15 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 		}
 	})
 
+	// Build kanban and profile screens.
+	km := screens.NewKanbanModel(&t, apps, careerOpsPath, 120, 40)
+	emptyProfile := &model.UserProfile{}
+	profileModel := screens.NewProfileModel(&t, emptyProfile, 120, 40)
+
 	m := appModel{
 		pipeline:      &pm,
+		kanban:        &km,
+		profile:       &profileModel,
 		careerOpsPath: careerOpsPath,
 	}
 

@@ -5,7 +5,7 @@
      ============================================================
      This file contains the shared context for all career-ops modes.
      Before using career-ops, you MUST:
-     1. Fill in config/profile.yml with your personal data
+     1. Configure your profile via `career-ops profile` or MCP `profile_get` tool
      2. Create your cv.md in the project root
      3. (Optional) Create article-digest.md with your proof points
      4. Customize the sections below marked with [CUSTOMIZE]
@@ -13,11 +13,11 @@
 
 ## Sources of Truth (ALWAYS read before evaluating)
 
-| File | Path | When |
-|------|------|------|
+| Source | Location | When |
+|--------|----------|------|
 | cv.md | `cv.md` (project root) | ALWAYS |
 | article-digest.md | `article-digest.md` (if exists) | ALWAYS (detailed proof points) |
-| profile.yml | `config/profile.yml` | ALWAYS (candidate identity and targets) |
+| SQLite database | `career-ops.db` → tabla `user_profile` | ALWAYS (candidate identity and targets) |
 
 **RULE: NEVER hardcode metrics from proof points.** Read them from cv.md + article-digest.md at evaluation time.
 **RULE: For article/project metrics, article-digest.md takes precedence over cv.md** (cv.md may have older numbers).
@@ -42,18 +42,18 @@ The skill applies with EQUAL rigor to ALL target roles. None is primary or secon
 
 | If the role is... | Emphasize about the candidate... | Proof point sources |
 |-------------------|----------------------------------|---------------------|
-| Platform / DevOps | ECS→EKS migrations, ArgoCD/GitOps, 45% cost reduction, 2B request eliminations via Cloudflare Workers | config/profile.yml |
-| AI / ML Infrastructure | Kagent (K8s-native AI agents), AI-enhanced GitOps with Kubechecks, CC-Relay (multi-provider LLM gateway), MCP servers | config/profile.yml |
-| Fullstack Engineer | G2 Buyer Intent Data product, Ruby on Rails + Go + React + Hotwire, GraphQL APIs | config/profile.yml |
-| Solutions Architect | Crossplane IaC (70% faster provisioning), enterprise AI adoption at scale | config/profile.yml |
-| SRE / Cloud Engineer | ARM/Spot optimization, observability, incident response, cost optimization | config/profile.yml |
+| Platform / DevOps | ECS→EKS migrations, ArgoCD/GitOps, 45% cost reduction, 2B request eliminations via Cloudflare Workers | DB (user_profile) |
+| AI / ML Infrastructure | Kagent (K8s-native AI agents), AI-enhanced GitOps with Kubechecks, CC-Relay (multi-provider LLM gateway), MCP servers | DB (user_profile) |
+| Fullstack Engineer | G2 Buyer Intent Data product, Ruby on Rails + Go + React + Hotwire, GraphQL APIs | DB (user_profile) |
+| Solutions Architect | Crossplane IaC (70% faster provisioning), enterprise AI adoption at scale | DB (user_profile) |
+| SRE / Cloud Engineer | ARM/Spot optimization, observability, incident response, cost optimization | DB (user_profile) |
 
 ### Exit Narrative (use in ALL framings)
 
-Read from `config/profile.yml` → `narrative.exit_story`:
+Read from `DB (user_profile)` → `narrative.exit_story`:
 "Deep infrastructure engineer who has driven enterprise AI adoption from the platform layer up. Track record of measurable impact: 45% cloud cost reductions, 60% faster deployments, 2B monthly request eliminations. Active open source contributor across Go, Crystal, and JS ecosystems."
 
-Use the candidate's exit story from `config/profile.yml` to frame ALL content:
+Use the candidate's exit story from `DB (user_profile)` to frame ALL content:
 - **In PDF Summaries:** Bridge from past to future -- "Now applying the same [skill] to [JD domain]."
 - **In STAR stories:** Reference proof points from article-digest.md
 - **In Draft Answers (Section G):** The transition narrative should appear in the first response.
@@ -78,7 +78,7 @@ Convert "builder" into a professional signal, not a "hobby maker". Real proof po
        url: "https://yoursite.dev/demo"
        password: "demo-2026"
        when_to_share: "LLMOps, AI Platform, observability roles"
-     Read from config/profile.yml → narrative.proof_points and narrative.dashboard -->
+     Read from DB (user_profile) → narrative.proof_points and narrative.dashboard -->
 
 If the candidate has a live demo/dashboard (check profile.yml), offer access in applications for relevant roles.
 
@@ -107,7 +107,7 @@ If the candidate has a live demo/dashboard (check profile.yml), offer access in 
 
 ### Location Policy
 
-<!-- [CUSTOMIZE] Adapt to your situation. Read from config/profile.yml → location -->
+<!-- [CUSTOMIZE] Adapt to your situation. Read from DB (user_profile) → location -->
 
 **In forms:**
 - Binary "can you be on-site?" questions: follow your actual availability from profile.yml

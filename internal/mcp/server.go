@@ -7,17 +7,21 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+
+	"github.com/omarluq/career-ops/internal/db"
 )
 
 // Server wraps career-ops functionality as an MCP tool server.
 type Server struct {
 	mcpServer     *server.MCPServer
+	repo          db.Repository
 	careerOpsPath string
 }
 
-// NewServer creates a new MCP server rooted at the given career-ops directory.
-func NewServer(careerOpsPath string) *Server {
-	s := &Server{careerOpsPath: careerOpsPath}
+// NewServer creates a new MCP server backed by the given repository.
+// careerOpsPath is retained for report file access.
+func NewServer(r db.Repository, careerOpsPath string) *Server {
+	s := &Server{repo: r, careerOpsPath: careerOpsPath}
 
 	s.mcpServer = server.NewMCPServer(
 		"career-ops",
@@ -46,6 +50,7 @@ func (s *Server) registerTools() {
 	s.mcpServer.AddTool(listApplicationsTool(), s.handleListApplications)
 	s.mcpServer.AddTool(getApplicationTool(), s.handleGetApplication)
 	s.mcpServer.AddTool(updateStatusTool(), s.handleUpdateStatus)
+	s.registerProfileTools()
 }
 
 // registerResources adds all career-ops resources to the MCP server.

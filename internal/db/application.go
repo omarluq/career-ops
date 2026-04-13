@@ -116,6 +116,21 @@ func (d *DB) GetApplication(ctx context.Context, id int) (Application, error) {
 	return a, nil
 }
 
+// GetApplicationByNumber returns a single application by its tracker number.
+func (d *DB) GetApplicationByNumber(ctx context.Context, number int) (*Application, error) {
+	var a Application
+	err := d.ksql.QueryOne(ctx, &a, `
+		SELECT id, number, date, company, company_key, role, score, score_raw,
+		       status, has_pdf, report_number, report_path, job_url, notes,
+		       archetype, tldr, remote, comp_estimate, created_at, updated_at
+		FROM applications
+		WHERE number = ?`, number)
+	if err != nil {
+		return nil, oops.Wrapf(err, "getting application number=%d", number)
+	}
+	return &a, nil
+}
+
 // UpsertApplication inserts or updates an application keyed by number.
 // Uses raw SQL for ON CONFLICT upsert since ksql does not support it natively.
 func (d *DB) UpsertApplication(ctx context.Context, app *Application) error {

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,10 +11,12 @@ import (
 	"github.com/samber/lo"
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
+	"github.com/omarluq/career-ops/internal/closer"
+	"github.com/omarluq/career-ops/internal/db"
 	"github.com/omarluq/career-ops/internal/model"
 	"github.com/omarluq/career-ops/internal/states"
-	"github.com/omarluq/career-ops/internal/tracker"
 )
 
 var (
@@ -55,29 +57,37 @@ func okMsg(msg string) {
 	fmt.Printf("  OK   %s\n", msg)
 }
 
-func runVerify(_ *cobra.Command, _ []string) error {
+func runVerify(_ *cobra.Command, _ []string) (err error) {
 	root := verifyPath
+	dbPath := viper.GetString("db")
+	ctx := context.Background()
 
 	// Initialize states from YAML
 	states.Init(root)
 
-	// Try to find and parse applications.md
-	appsFile, err := tracker.FindAppsFile(root)
+	g := closer.Guard{Err: &err}
+
+	database, err := db.OpenAndMigrate(ctx, dbPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			fmt.Println("\nNo applications.md found. This is normal for a fresh setup.")
-			fmt.Println("The file will be created when you evaluate your first offer.")
-			return nil
-		}
-		return oops.Wrapf(err, "finding applications file")
+		return err
+	}
+	defer g.Close(database)
+
+	r := db.NewSQLite(database)
+	defer g.Close(r)
+
+	apps, err := r.ListApplications(ctx)
+	if err != nil {
+		return oops.Wrapf(err, "listing applications")
 	}
 
-	apps, err := tracker.ParseApplications(root)
-	if err != nil {
-		return oops.Wrapf(err, "parsing applications")
+	if len(apps) == 0 {
+		fmt.Println("\nNo applications found in database. This is normal for a fresh setup.")
+		fmt.Println("Run 'career-ops import' to import existing data, or evaluate your first offer.")
+		return nil
 	}
 
-	fmt.Printf("\nChecking %d entries in %s\n\n", len(apps), appsFile)
+	fmt.Printf("\nChecking %d entries from database\n\n", len(apps))
 
 	result := &verifyResult{}
 
@@ -86,7 +96,6 @@ func runVerify(_ *cobra.Command, _ []string) error {
 	checkDuplicates(result, apps)
 	checkReportLinks(result, apps, root)
 	checkScores(result, apps)
-	checkRowFormat(result, root)
 	checkPendingTSVs(result, root)
 	checkBoldScores(result, apps)
 	checkDates(result, apps)
@@ -106,7 +115,7 @@ func runVerify(_ *cobra.Command, _ []string) error {
 	}
 
 	if result.errors > 0 {
-		os.Exit(1)
+		return oops.Errorf("pipeline has %d error(s)", result.errors)
 	}
 	return nil
 }
@@ -154,7 +163,7 @@ func checkDuplicates(r *verifyResult, apps []model.CareerApplication) {
 
 	keyed := lo.Map(apps, func(app model.CareerApplication, _ int) appKey {
 		return appKey{
-			key:     tracker.NormalizeCompanyKey(app.Company) + "::" + strings.ToLower(app.Role),
+			key:     strings.ToLower(app.Company) + "::" + strings.ToLower(app.Role),
 			company: app.Company,
 			role:    app.Role,
 			num:     app.Number,
@@ -213,53 +222,6 @@ func checkScores(r *verifyResult, apps []model.CareerApplication) {
 	if bad == 0 {
 		okMsg("All scores valid")
 	}
-}
-
-// checkRowFormat reads the raw file and checks that every table row has enough columns.
-func checkRowFormat(r *verifyResult, root string) {
-	appsFile, err := tracker.FindAppsFile(root)
-	if err != nil {
-		return
-	}
-	content, err := os.ReadFile(filepath.Clean(appsFile))
-	if err != nil {
-		return
-	}
-
-	lines := strings.Split(string(content), "\n")
-	dataRows := lo.Filter(lines, func(line string, _ int) bool {
-		return isDataRow(line)
-	})
-
-	bad := lo.CountBy(dataRows, func(line string) bool {
-		parts := strings.Split(line, "|")
-		if len(parts) < 9 {
-			truncated := line
-			if len(truncated) > 80 {
-				truncated = truncated[:80] + "..."
-			}
-			r.errorf("Row with <9 columns: %s", truncated)
-			return true
-		}
-		return false
-	})
-	if bad == 0 {
-		okMsg("All rows properly formatted")
-	}
-}
-
-// isDataRow returns true if the line is a table data row (not header/separator).
-func isDataRow(line string) bool {
-	if !strings.HasPrefix(line, "|") {
-		return false
-	}
-	if strings.Contains(line, "---") {
-		return false
-	}
-	if strings.Contains(line, "Company") || strings.Contains(line, "Empresa") {
-		return false
-	}
-	return true
 }
 
 // checkPendingTSVs warns about unmerged TSV files in tracker-additions/.
