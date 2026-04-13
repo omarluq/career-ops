@@ -261,15 +261,6 @@ career-ops/
 | **Functional Go** | samber/lo (collections) + samber/oops (errors) + samber/mo (monads) |
 | **MCP** | mark3labs/mcp-go v0.47 (stdio transport) |
 
-## Ethical Use
-
-**This system is designed for quality, not quantity.** The goal is to help you find and apply to roles where there is a genuine match -- not to spam companies with mass applications.
-
-- Never submit an application without reviewing it first
-- If a score is below 3.0/5, the system explicitly recommends skipping
-- A well-targeted application to 5 companies beats a generic blast to 50
-- Every application a human reads costs someone's attention -- only send what is worth reading
-
 ## Upstream
 
 This is a Go port of [santifer/career-ops](https://github.com/santifer/career-ops). The original system was built by [Santiago](https://santifer.io), who used it to evaluate 740+ offers, generate 100+ tailored CVs, and land a Head of Applied AI role. The portfolio that pairs with this system is also open source: [cv-santiago](https://github.com/santifer/cv-santiago).

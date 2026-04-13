@@ -103,6 +103,8 @@ type KanbanModel struct {
 	statusCursor     int
 	statusPicker     bool
 	showEmpty        bool
+	horizScroll      int // horizontal offset (leftmost visible column index)
+	visibleCols      int // cached count of how many columns fit in viewport
 }
 
 // card layout constants.
@@ -215,7 +217,8 @@ func (m *KanbanModel) handleKeyAction(msg tea.KeyMsg) (KanbanModel, tea.Cmd) {
 }
 
 // moveColumn navigates horizontally between columns, preserving the cursor row
-// so left/right feels like moving across a grid.
+// so left/right feels like moving across a grid. Adjusts horizScroll to keep
+// the active column visible.
 func (m *KanbanModel) moveColumn(delta int) *KanbanModel {
 	if len(m.columns) == 0 {
 		return m
@@ -223,11 +226,15 @@ func (m *KanbanModel) moveColumn(delta int) *KanbanModel {
 	prevCursor := m.columns[m.activeCol].cursor
 
 	m.activeCol += delta
-	if m.activeCol < 0 {
-		m.activeCol = 0
+	m.activeCol = max(0, min(m.activeCol, len(m.columns)-1))
+
+	// Horizontal scroll follow — keep activeCol within the visible window.
+	visibleCols := m.visibleColumnCount()
+	if m.activeCol < m.horizScroll {
+		m.horizScroll = m.activeCol
 	}
-	if m.activeCol >= len(m.columns) {
-		m.activeCol = len(m.columns) - 1
+	if m.activeCol >= m.horizScroll+visibleCols {
+		m.horizScroll = m.activeCol - visibleCols + 1
 	}
 
 	// Carry cursor row position to the new column (clamped to its card count).
@@ -278,6 +285,14 @@ func (m *KanbanModel) visibleCardCount() int {
 		return 1
 	}
 	return available / kanbanCardHeight
+}
+
+// visibleColumnCount returns how many columns fit horizontally in the viewport.
+// Uses kanbanCardWidth (minimum column width) to determine capacity.
+func (m *KanbanModel) visibleColumnCount() int {
+	totalColWidth := kanbanCardWidth + kanbanColGap
+	count := m.width / totalColWidth
+	return max(1, min(count, len(m.columns)))
 }
 
 // currentApp returns the currently selected application, if any.
@@ -373,6 +388,9 @@ func (m *KanbanModel) RebuildColumns(apps []model.CareerApplication) {
 	if m.activeCol >= len(m.columns) {
 		m.activeCol = max(0, len(m.columns)-1)
 	}
+	if m.horizScroll >= len(m.columns) {
+		m.horizScroll = max(0, len(m.columns)-1)
+	}
 }
 
 // -- View --
@@ -398,16 +416,20 @@ func (m *KanbanModel) renderHeader() string {
 		Width(m.width).
 		Padding(0, 2)
 
+	leftInd := lo.Ternary(m.horizScroll > 0, "\u25c0 ", "")
+	rightInd := lo.Ternary(m.horizScroll+m.visibleCols < len(m.columns), " \u25b6", "")
+
 	title := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Blue).Render("KANBAN BOARD")
 	count := lipgloss.NewStyle().Foreground(m.theme.Subtext).
 		Render(fmt.Sprintf("%d offers | %d columns", len(m.apps), len(m.columns)))
 
-	gap := m.width - lipgloss.Width(title) - lipgloss.Width(count) - 4
+	arrowsWidth := lipgloss.Width(leftInd) + lipgloss.Width(rightInd)
+	gap := m.width - lipgloss.Width(title) - lipgloss.Width(count) - arrowsWidth - 4
 	if gap < 1 {
 		gap = 1
 	}
 
-	return style.Render(title + strings.Repeat(" ", gap) + count)
+	return style.Render(leftInd + title + strings.Repeat(" ", gap) + count + rightInd)
 }
 
 func (m *KanbanModel) renderBoard() string {
@@ -420,26 +442,30 @@ func (m *KanbanModel) renderBoard() string {
 
 	colWidth := m.columnWidth()
 	visibleCards := m.visibleCardCount()
+	m.visibleCols = m.visibleColumnCount()
 
-	rendered := lo.Map(m.columns, func(col kanbanColumn, i int) string {
-		return m.renderColumn(&col, i, colWidth, visibleCards)
+	// Slice to only visible columns based on horizontal scroll offset.
+	startCol := m.horizScroll
+	endCol := min(len(m.columns), startCol+m.visibleCols)
+
+	rendered := lo.Map(m.columns[startCol:endCol], func(col kanbanColumn, i int) string {
+		actualIdx := startCol + i
+		return m.renderColumn(&col, actualIdx, colWidth, visibleCards)
 	})
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, rendered...)
 }
 
-// columnWidth calculates the width available for each column.
+// columnWidth calculates the width available for each column based on visible count.
 func (m *KanbanModel) columnWidth() int {
 	if len(m.columns) == 0 {
 		return kanbanCardWidth
 	}
-	totalGaps := (len(m.columns) - 1) * kanbanColGap
+	visibleCols := m.visibleColumnCount()
+	totalGaps := (visibleCols - 1) * kanbanColGap
 	available := m.width - totalGaps - 2
-	w := available / len(m.columns)
-	if w < kanbanCardWidth {
-		w = kanbanCardWidth
-	}
-	return w
+	w := available / visibleCols
+	return max(kanbanCardWidth, w)
 }
 
 func (m *KanbanModel) renderColumn(col *kanbanColumn, colIdx, colWidth, visibleCards int) string {
