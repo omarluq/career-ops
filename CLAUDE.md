@@ -40,6 +40,9 @@ career-ops dashboard [--path .]
 # MCP server (includes profile tools)
 career-ops mcp          # Start MCP server (stdio transport)
 
+# Autonomous job loop
+career-ops godmode [--once] [--report-only]  # 24/7 scan → evaluate → apply → daily report
+
 # Development
 mise exec -- task test               # Run tests
 mise exec -- task lint               # golangci-lint
@@ -219,6 +222,7 @@ This system is designed to be customized by YOU (Claude). When the user asks you
 | Searches for new offers | `scan` |
 | Processes pending URLs | `pipeline` |
 | Batch processes offers | `batch` |
+| Autonomous job loop | `godmode` |
 | Manages their profile | `career-ops profile` CLI |
 | Wants profile enrichment | MCP `profile_enrich` tool |
 

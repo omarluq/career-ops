@@ -1,0 +1,125 @@
+# GodMod Configuration — Omar Alani
+# Autonomous job application loop — scan, evaluate, generate, apply, repeat
+
+# Enable/disable godmode (set to false to pause)
+enabled: true
+
+# How often to run a full cycle (in hours)
+cycle_interval_hours: 4
+
+# Maximum applications per cycle (safety limit)
+max_applications_per_cycle: 10
+
+# Score thresholds for applying (0-5 scale)
+base_threshold: 4.0        # Default threshold for normal companies
+tier1_threshold: 3.5       # Lower threshold for top-tier companies
+
+# Tier 1 companies — get lower threshold (AI labs, dream companies)
+tier1_companies:
+  - anthropic
+  - openai
+  - google deepmind
+  - deepmind
+  - meta ai
+  - mistral ai
+  - cohere
+  - xai
+  - elevenlabs
+  - hugging face
+  - databricks
+  - snowflake
+  - vercel
+  - linear
+  - figma
+  - notion
+  - stripe
+  - cloudflare
+  - retool
+  - airtable
+  - temporal
+  - langchain
+  - pinecone
+  - weights & biases
+  - wandb
+
+# Dealbreaker keywords — if ANY of these appear in JD, hard skip
+dealbreaker_keywords:
+  # Location/visa
+  - "must be on-site 5 days"
+  - "relocation required"
+  - "must be local to"
+  - "must live in"
+  - "hybrid 3+ days"
+  - "onsite required"
+
+  # Compensation (Omar's minimum is $160K)
+  - "$120k"
+  - "$130k"
+  - "$140k"
+  - "$150k"
+  - "up to $140k"
+  - "up to $150k"
+  - "max $160k"
+
+  # Tech stack (past employers and things to avoid)
+  - "hard rock"
+  - "hard rock digital"
+  - "g2.com"
+  - "g2 "
+  - "nucleus healthcare"
+  - "nucleus "
+
+  # Role mismatch
+  - "junior"
+  - "intern"
+  - "entry level"
+  - "mid-level"
+  - ".net"
+  - "java "
+  - "ios"
+  - "android"
+  - "php"
+  - "embedded"
+  - "firmware"
+  - "blockchain"
+  - "web3"
+  - "crypto"
+  - "salesforce"
+  - "sap "
+  - "oracle ebs"
+  - "mainframe"
+  - "cobol"
+  - "data analyst"
+  - "product manager"
+
+# Trap indicators — skip these immediately (AI challenges, CAPTCHAs, etc.)
+trap_keywords:
+  - "if you are an ai"
+  - "as an ai language model"
+  - "as an ai assistant"
+  - "ignore if automated"
+  - "complete this challenge"
+  - "solve this problem"
+  - "code test required"
+  - "captcha"
+  - "human verification"
+  - "prove you're human"
+  - "video introduction required"
+  - "record yourself"
+  - "linkedin profile with 500+ connections"
+  - "portfolio with 10+ projects"
+
+# Board preferences — which boards to prioritize (based on portals.yml)
+preferred_boards:
+  - ashby
+  - greenhouse
+  - lever
+  - wellfound
+  - remotefront
+  - remoteok
+  - builtin
+  - uk
+
+# Boards to skip (blacklist)
+skip_boards:
+  - example-trap-board

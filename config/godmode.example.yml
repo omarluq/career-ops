@@ -1,0 +1,65 @@
+# GodMod Configuration
+# Autonomous job application loop — scan, evaluate, generate, apply, repeat
+# Copy to config/godmode.yml and customize
+
+# Enable/disable godmode (set to false to pause)
+enabled: true
+
+# How often to run a full cycle (in hours)
+cycle_interval_hours: 4
+
+# Maximum applications per cycle (safety limit)
+max_applications_per_cycle: 10
+
+# Score thresholds for applying (0-5 scale)
+base_threshold: 4.0        # Default threshold for normal companies
+tier1_threshold: 3.5       # Lower threshold for top-tier companies
+
+# Tier 1 companies — get lower threshold because they're worth it
+tier1_companies:
+  - anthropic
+  - openai
+  - google deepmind
+  - deepmind
+  - meta ai
+  - mistral ai
+  - cohere
+  - elevenlabs
+
+# Dealbreaker keywords — if ANY of these appear in JD, hard skip
+dealbreaker_keywords:
+  - "must be on-site 5 days"
+  - "visa sponsorship not available"
+  - "no remote work"
+  - "relocation required"
+  - "no visa sponsorship"
+  - "must be local to"
+  - "h-1b not available"
+
+# Trap indicators — skip these immediately (AI challenges, CAPTCHAs, etc.)
+trap_keywords:
+  - "if you are an ai"
+  - "as an ai language model"
+  - "as an ai assistant"
+  - "ignore if automated"
+  - "complete this challenge"
+  - "solve this problem"
+  - "code test required"
+  - "captcha"
+  - "human verification"
+  - "prove you're human"
+  - "video introduction required"
+  - "record yourself"
+  - "linkedin profile with 500+ connections"
+
+# Board preferences — which boards to prioritize (optional)
+# Boards in internal/jobboard/boards/ — slugs only
+preferred_boards:
+  - ashby
+  - greenhouse
+  - lever
+  - wellfound
+
+# Boards to skip (blacklist)
+skip_boards:
+  - example-trap-board
